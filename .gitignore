@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+venv-m4/
+ENV/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Project-specific
+# User configs (use .example.yaml templates)
+config.yaml
+config.m4.yaml
+# Runtime data (speakers.json, queue/)
+data/
+# Downloaded ML models
+models/
+# Claude Code session data
+.claude/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
