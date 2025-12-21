@@ -1,0 +1,5 @@
+#!/bin/bash
+# M4-optimized transcription with mlx-whisper and pyannote diarization
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/venv-m4/bin/activate"
+PYTHONPATH="$SCRIPT_DIR/src" python3 -m transcribe_m4 "$@"

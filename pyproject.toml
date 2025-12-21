@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "transcribe"
+version = "0.1.0"
+description = "Voice-activated transcription with speaker diarization"
+readme = "docs/voice-activated-transcription-device.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+dependencies = [
+    "sounddevice>=0.4.6",
+    "numpy>=1.24.0",
+    "torch>=2.0.0",
+    "torchaudio>=2.0.0",
+    "faster-whisper>=0.10.0",
+    "speechbrain>=0.5.15",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "ruff>=0.1.0",
+]
+
+[project.scripts]
+transcribe = "transcribe.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

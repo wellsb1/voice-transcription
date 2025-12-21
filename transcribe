@@ -1,0 +1,3 @@
+#!/bin/bash
+# Wrapper script to run transcribe without activating venv
+exec "$(dirname "$0")/venv/bin/python" -m transcribe "$@"
