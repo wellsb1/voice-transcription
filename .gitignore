@@ -35,11 +35,8 @@ ENV/
 *.swo
 
 # Project-specific
-# User configs (use .example.yaml templates)
-config.yaml
-config-m4.yaml
-config-whisper.yaml
-config-sherpa.yaml
+# Environment variables (secrets)
+.env
 # Runtime data (speakers.json, queue/)
 data/
 # Downloaded ML models

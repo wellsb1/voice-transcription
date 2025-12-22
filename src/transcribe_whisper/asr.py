@@ -4,6 +4,8 @@ from typing import Optional
 import numpy as np
 from faster_whisper import WhisperModel
 
+from transcribe_shared.transcript_filter import is_garbage_transcript
+
 
 class Transcriber:
     """
@@ -17,6 +19,7 @@ class Transcriber:
         model_name: str = "medium.en",
         device: str = "cpu",
         compute_type: str = "int8",
+        ignore_words: Optional[list[str]] = None,
     ):
         """
         Initialize transcriber.
@@ -25,10 +28,12 @@ class Transcriber:
             model_name: Whisper model size (tiny.en, base.en, small.en, medium.en)
             device: Device to run on ("cpu" or "cuda")
             compute_type: Compute type ("int8", "float16", "float32")
+            ignore_words: Words to always filter from transcripts
         """
         self.model_name = model_name
         self.device = device
         self.compute_type = compute_type
+        self.ignore_words = ignore_words or []
         self._model: Optional[WhisperModel] = None
 
     def _load_model(self) -> None:
@@ -68,7 +73,7 @@ class Transcriber:
         results = []
         for segment in segments:
             text = segment.text.strip()
-            if text:
+            if text and not is_garbage_transcript(text, self.ignore_words):
                 results.append(
                     {
                         "start": segment.start,
@@ -101,7 +106,7 @@ class Transcriber:
         results = []
         for segment in segments:
             text = segment.text.strip()
-            if text:
+            if text and not is_garbage_transcript(text, self.ignore_words):
                 words = []
                 if segment.words:
                     words = [

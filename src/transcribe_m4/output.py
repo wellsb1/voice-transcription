@@ -47,6 +47,7 @@ class JsonlOutput:
             "timestamp": segment_timestamp.isoformat(),
             "device": self.device_name,
             "speaker": transcript.speaker,
+            "confidence": round(transcript.confidence, 3),
             "start": round(transcript.start, 3),
             "end": round(transcript.end, 3),
             "text": transcript.text,

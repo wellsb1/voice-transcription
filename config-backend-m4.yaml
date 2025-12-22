@@ -5,28 +5,34 @@
 # Options: mlx-community/whisper-large-v3-turbo, mlx-community/whisper-large-v3
 whisper_model: "mlx-community/whisper-large-v3-turbo"
 
+# Transcript filtering - words to always ignore (e.g., keyboard clicks transcribed as gibberish)
+# If a transcript consists entirely of these words, it will be filtered out
+ignore_words: []  # Example: ["acl", "ack", "hmm"]
+
 # Diarization - pyannote model
 # Requires HuggingFace token for model access
 # Options: pyannote/speaker-diarization-community-1, pyannote/speaker-diarization-3.1
 diarization_model: "pyannote/speaker-diarization-community-1"
 
 # HuggingFace token for pyannote model access
-# Set via HF_TOKEN environment variable or uncomment and set here
-# huggingface_token: "hf_your_token_here"
-huggingface_token: null
+# Set HUGGINGFACE_TOKEN in .env file
+huggingface_token: ${HUGGINGFACE_TOKEN:-null}
 
 # Batch parameters
 min_batch_duration: 30.0   # Minimum batch for pyannote context (seconds)
 max_batch_duration: 60.0   # Force batch during monologues (seconds)
 silence_duration: 0.5      # Silence threshold to trigger batch boundary (seconds)
+vad_threshold: 0.6         # VAD sensitivity (0.0-1.0, higher = less sensitive to quiet sounds)
+min_audio_energy: 0.0003   # Minimum RMS energy to process (just above noise floor)
 
 # Speaker tracking (cross-batch persistence)
 speaker_similarity_threshold: 0.75   # Cosine similarity for speaker matching
 speaker_inactivity_timeout: 1800.0   # Reset speaker IDs after 30 min silence (seconds)
 
 # Audio settings
-audio_device: null         # null = system default, or device name/index
-sample_rate: 16000         # 16kHz required for Whisper
+audio_device: null              # null = system default input, or device name/index
+audio_output_device: null       # null = system default output (for --debug playback)
+sample_rate: 16000              # 16kHz required for Whisper
 
 # Output
-device_name: "m4-mini"     # Device identifier in JSONL output
+device_name: ${DEVICE_NAME:-default}     # Device identifier in JSONL output

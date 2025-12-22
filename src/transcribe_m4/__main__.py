@@ -16,8 +16,12 @@ from .output import JsonlOutput
 from .pipeline import Pipeline
 
 
-def parse_args() -> tuple[Config, bool]:
-    """Parse command-line arguments."""
+def parse_args() -> tuple[Config, bool, bool]:
+    """Parse command-line arguments.
+
+    Returns:
+        Tuple of (config, should_exit, debug_mode)
+    """
     parser = argparse.ArgumentParser(
         prog="transcribe_m4",
         description="M4-optimized transcription with speaker diarization. Outputs JSONL to stdout.",
@@ -45,20 +49,36 @@ def parse_args() -> tuple[Config, bool]:
         type=str,
         help="Audio input device name or index",
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Debug mode: play back audio chunks before processing",
+    )
 
     args = parser.parse_args()
 
     if args.list_devices:
         import sounddevice as sd
 
-        print("Available audio input devices:")
-        print("-" * 60)
         devices = sd.query_devices()
+        default_input = sd.query_devices(kind="input")
+        default_output = sd.query_devices(kind="output")
+
+        print("Available audio INPUT devices:")
+        print("-" * 60)
         for i, device in enumerate(devices):
             if device["max_input_channels"] > 0:
-                default = " (default)" if device == sd.query_devices(kind="input") else ""
+                default = " (default)" if device == default_input else ""
                 print(f"  [{i}] {device['name']}{default}")
-        return Config(), True
+
+        print("\nAvailable audio OUTPUT devices:")
+        print("-" * 60)
+        for i, device in enumerate(devices):
+            if device["max_output_channels"] > 0:
+                default = " (default)" if device == default_output else ""
+                print(f"  [{i}] {device['name']}{default}")
+
+        return Config(), True, False
 
     # Load config
     config = load_config(args.config)
@@ -69,14 +89,17 @@ def parse_args() -> tuple[Config, bool]:
     if args.audio_device:
         config.audio_device = args.audio_device
 
-    return config, False
+    return config, False, args.debug
 
 
 def main() -> int:
     """Main entry point."""
-    config, should_exit = parse_args()
+    config, should_exit, debug_mode = parse_args()
     if should_exit:
         return 0
+
+    if debug_mode:
+        print("DEBUG MODE: Will play back audio before processing", file=sys.stderr)
 
     # Initialize components
     print(f"Initializing M4 transcription...", file=sys.stderr)
@@ -92,6 +115,7 @@ def main() -> int:
         huggingface_token=config.huggingface_token,
         speaker_similarity_threshold=config.speaker_similarity_threshold,
         speaker_inactivity_timeout=config.speaker_inactivity_timeout,
+        ignore_words=config.ignore_words,
     )
     pipeline.load()
 
@@ -101,6 +125,7 @@ def main() -> int:
         min_batch_duration=config.min_batch_duration,
         max_batch_duration=config.max_batch_duration,
         silence_duration=config.silence_duration,
+        vad_threshold=config.vad_threshold,
     )
 
     # Create output
@@ -165,6 +190,16 @@ def main() -> int:
 
             if len(audio) == 0:
                 continue
+
+            # Debug: play back audio before processing
+            if debug_mode:
+                import sounddevice as sd
+                duration = len(audio) / config.sample_rate
+                out_dev = config.audio_output_device or "default"
+                print(f"\n[DEBUG] Playing {duration:.1f}s of audio on {out_dev}...", file=sys.stderr)
+                sd.play(audio, config.sample_rate, device=config.audio_output_device)
+                sd.wait()
+                print("[DEBUG] Playback complete. Processing...", file=sys.stderr)
 
             # Process batch
             try:

@@ -1,5 +1,9 @@
 # Voice-Activated Transcription Device
 
+> **DEPRECATED**: This document is outdated. See [README.md](../README.md) for current documentation.
+
+---
+
 ## Project Overview
 
 Build an always-on, open-source voice transcription system that:

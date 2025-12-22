@@ -1,6 +1,25 @@
 #!/bin/bash
 # Transcript logger - reads stdin, writes to rolling files, passes through to stdout
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-source "$SCRIPT_DIR/venv-m4/bin/activate"
 cd "$SCRIPT_DIR"
+VENV_DIR="$SCRIPT_DIR/venv-m4"
+
+# Auto-setup venv if missing (uses same venv as m4)
+if [ ! -f "$VENV_DIR/bin/activate" ]; then
+    echo "Setting up venv-m4..."
+    python3 -m venv "$VENV_DIR"
+    source "$VENV_DIR/bin/activate"
+    pip install --upgrade pip
+    pip install numpy torch torchaudio sounddevice pyyaml mlx-whisper pyannote.audio
+else
+    source "$VENV_DIR/bin/activate"
+fi
+
+# Source .env if present (set -a exports all variables)
+if [ -f "$SCRIPT_DIR/.env" ]; then
+    set -a
+    source "$SCRIPT_DIR/.env"
+    set +a
+fi
+
 PYTHONPATH="$SCRIPT_DIR/src" python3 -m transcribe_logger "$@"

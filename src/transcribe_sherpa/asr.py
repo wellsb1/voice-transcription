@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import Optional
 import numpy as np
 
+from transcribe_shared.transcript_filter import is_garbage_transcript
+
 
 class Transcriber:
     """
@@ -28,6 +30,7 @@ class Transcriber:
         provider: str = "cpu",
         num_threads: int = 4,
         models_dir: str = "./models/sherpa",
+        ignore_words: Optional[list[str]] = None,
     ):
         """
         Initialize transcriber.
@@ -38,12 +41,14 @@ class Transcriber:
             provider: ONNX execution provider (cpu, cuda, coreml)
             num_threads: Number of CPU threads for inference
             models_dir: Directory containing sherpa models
+            ignore_words: Words to always filter from transcripts
         """
         self.model_name = model_name
         self.use_int8 = use_int8
         self.provider = provider
         self.num_threads = num_threads
         self.models_dir = Path(models_dir)
+        self.ignore_words = ignore_words or []
         self._recognizer = None
 
     def _get_model_dir(self) -> Path:
@@ -114,7 +119,7 @@ class Transcriber:
         self._recognizer.decode_stream(stream)
 
         text = stream.result.text.strip()
-        if not text:
+        if not text or is_garbage_transcript(text, self.ignore_words):
             return []
 
         # Sherpa doesn't provide word-level timestamps in offline mode

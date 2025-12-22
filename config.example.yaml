@@ -1,9 +1,0 @@
-# Transcription Backend Selection
-# This file only selects which backend to use.
-# Each backend has its own config file: config-m4.yaml, config-whisper.yaml, config-sherpa.yaml
-
-# Available backends:
-#   m4      - Mac Mini M4 with mlx-whisper and pyannote (Apple Silicon optimized)
-#   whisper - faster-whisper with ECAPA-TDNN (CPU/CUDA)
-#   sherpa  - sherpa-onnx (cross-platform, mobile-friendly)
-backend: "m4"

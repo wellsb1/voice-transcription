@@ -63,6 +63,11 @@ class Diarizer:
         print(f"Loading diarization model ({self.model_name})...", file=sys.stderr)
         print(f"Using device: {self.device}", file=sys.stderr)
 
+        # Suppress torchcodec warning - we don't decode files, we capture audio directly
+        # This must be set before any pyannote imports since it triggers on module load
+        warnings.filterwarnings("ignore", message=".*torchcodec.*")
+        warnings.filterwarnings("ignore", module="pyannote.audio.core.io")
+
         # PyTorch 2.6+ requires allowlisting pyannote classes for safe loading
         from pyannote.audio.core.task import Specifications, Problem, Resolution
         torch.serialization.add_safe_globals([Specifications, Problem, Resolution])
@@ -111,8 +116,11 @@ class Diarizer:
         embeddings_by_speaker: dict[str, np.ndarray] = {}
         if diarization_output.speaker_embeddings is not None:
             labels = list(diarization.labels())
+            print(f"  Embeddings: {len(labels)} speakers, shape={diarization_output.speaker_embeddings.shape}", file=sys.stderr)
             for i, label in enumerate(labels):
                 embeddings_by_speaker[label] = diarization_output.speaker_embeddings[i]
+        else:
+            print("  WARNING: No speaker embeddings returned from pyannote!", file=sys.stderr)
 
         # Convert to segments
         segments = []

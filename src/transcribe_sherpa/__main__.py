@@ -44,6 +44,7 @@ def main() -> int:
         provider=config.sherpa_provider,
         num_threads=config.sherpa_num_threads,
         models_dir=config.models_dir,
+        ignore_words=config.ignore_words,
     )
     transcriber.load()
 

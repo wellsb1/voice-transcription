@@ -1,0 +1,5 @@
+# Transcribe Widget Configuration
+# The widget dynamically discovers config-backend-*.yaml files
+
+# Rolling window for word count stats (minutes)
+stats_window_minutes: 5

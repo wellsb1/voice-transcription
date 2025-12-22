@@ -1,33 +1,75 @@
 #!/bin/bash
-# Unified transcription launcher - picks backend from config.yaml
-# Set TRANSCRIBE_BACKEND env var or edit config.yaml to change backend
+# Main transcription launcher - runs backend and pipes to logger
+# Usage: ./transcribe --config=config-backend-m4.yaml
+#        ./transcribe (uses default: config-backend-m4.yaml)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# Detect backend from config.yaml or env
-BACKEND="${TRANSCRIBE_BACKEND:-}"
-if [ -z "$BACKEND" ] && [ -f config.yaml ]; then
-    BACKEND=$(grep -E "^backend:" config.yaml | sed 's/.*:[[:space:]]*//' | tr -d '"'"'" | tr -d ' ')
+# Source .env if present (set -a exports all variables)
+if [ -f "$SCRIPT_DIR/.env" ]; then
+    set -a
+    source "$SCRIPT_DIR/.env"
+    set +a
 fi
-BACKEND="${BACKEND:-m4}"
 
+# Parse arguments
+CONFIG=""
+for arg in "$@"; do
+    case $arg in
+        --config=*)
+            CONFIG="${arg#*=}"
+            shift
+            ;;
+        --config)
+            CONFIG="$2"
+            shift 2
+            ;;
+        --list-configs)
+            echo "Available configs:"
+            for f in "$SCRIPT_DIR"/config-backend-*.yaml; do
+                [ -f "$f" ] && echo "  $(basename "$f")"
+            done
+            exit 0
+            ;;
+        --help|-h)
+            echo "Usage: $0 [--config=CONFIG_FILE]"
+            echo ""
+            echo "Options:"
+            echo "  --config=FILE    Config file (default: config-backend-m4.yaml)"
+            echo "  --list-configs   List available config files"
+            echo "  --help           Show this help"
+            echo ""
+            echo "Config file naming: config-backend-{backend}[-postfix].yaml"
+            echo "  e.g., config-backend-m4.yaml, config-backend-m4-meeting.yaml"
+            exit 0
+            ;;
+    esac
+done
+
+# Default config
+CONFIG="${CONFIG:-config-backend-m4.yaml}"
+
+# Ensure config exists
+if [ ! -f "$SCRIPT_DIR/$CONFIG" ]; then
+    echo "Error: Config file not found: $CONFIG" >&2
+    echo "Use --list-configs to see available configs" >&2
+    exit 1
+fi
+
+# Extract backend from config filename: config-backend-{backend}[-postfix].yaml
+BACKEND=$(echo "$CONFIG" | sed 's/config-backend-//' | sed 's/\.yaml$//' | sed 's/-.*//')
+
+# Validate backend
 case "$BACKEND" in
-    m4)
-        source "$SCRIPT_DIR/venv-m4/bin/activate"
-        PYTHONPATH="$SCRIPT_DIR/src" python3 -m transcribe_m4 "$@"
-        ;;
-    whisper)
-        source "$SCRIPT_DIR/venv-whisper/bin/activate" 2>/dev/null || source "$SCRIPT_DIR/venv/bin/activate"
-        PYTHONPATH="$SCRIPT_DIR/src" python3 -m transcribe_whisper "$@"
-        ;;
-    sherpa)
-        source "$SCRIPT_DIR/venv-sherpa/bin/activate" 2>/dev/null || source "$SCRIPT_DIR/venv/bin/activate"
-        PYTHONPATH="$SCRIPT_DIR/src" python3 -m transcribe_sherpa "$@"
+    m4|whisper|sherpa)
         ;;
     *)
-        echo "Unknown backend: $BACKEND" >&2
-        echo "Valid backends: m4, whisper, sherpa" >&2
+        echo "Error: Unknown backend '$BACKEND' from config '$CONFIG'" >&2
+        echo "Expected config-backend-{m4|whisper|sherpa}[-postfix].yaml" >&2
         exit 1
         ;;
 esac
+
+# Run backend piped to logger
+exec "$SCRIPT_DIR/transcribe-$BACKEND" --config="$SCRIPT_DIR/$CONFIG" "$@" | "$SCRIPT_DIR/transcribe-logger"

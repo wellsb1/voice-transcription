@@ -1,20 +1,23 @@
 """Transcript logger with file rollover - passes through stdin to stdout."""
 
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-import yaml
+from transcribe_shared import load_yaml
 
 
 def load_config() -> dict:
-    """Load config from config.m4.yaml."""
-    config_path = Path("config.m4.yaml")
-    if config_path.exists():
-        with open(config_path) as f:
-            return yaml.safe_load(f) or {}
-    return {}
+    """Load config from TRANSCRIBE_LOGGER_CONFIG or config-backend-m4.yaml."""
+    env_path = os.environ.get("TRANSCRIBE_LOGGER_CONFIG")
+    if env_path:
+        config_path = Path(env_path)
+    else:
+        config_path = Path("config-backend-m4.yaml")
+
+    return load_yaml(config_path)
 
 
 class TranscriptLogger:

@@ -1,6 +1,8 @@
 """Menu bar widget for transcription control and monitoring."""
 
+import glob
 import json
+import os
 import subprocess
 import threading
 from collections import deque
@@ -41,10 +43,15 @@ class TranscribeWidget(rumps.App):
         super().__init__("~", quit_button=None)
         self._icon_initialized = False
 
-        # Load config
-        self.config = self._load_config()
-        self.command = self.config.get("command", "./transcribe-m4")
-        self.stats_window_minutes = self.config.get("stats_window_minutes", 5)
+        # Get script directory (where transcribe lives)
+        self.script_dir = Path(__file__).parent.parent.parent
+
+        # Load widget config
+        self.widget_config = self._load_widget_config()
+        self.stats_window_minutes = self.widget_config.get("stats_window_minutes", 5)
+
+        # Current config being used
+        self.current_config: Optional[str] = None
 
         # Process state
         self.process: Optional[subprocess.Popen] = None
@@ -55,22 +62,73 @@ class TranscribeWidget(rumps.App):
         self.word_counts: deque = deque()
         self.lock = threading.Lock()
 
-        # Menu items
-        self.start_stop_item = rumps.MenuItem("Start", callback=self.toggle)
-        self.stats_item = rumps.MenuItem("Words (5m): 0", callback=None)
-        self.stats_item.set_callback(None)  # Non-clickable
+        # Discover available configs
+        self.configs = self._discover_configs()
 
-        self.menu = [
-            self.start_stop_item,
-            None,  # Separator
-            self.stats_item,
-            None,  # Separator
-            rumps.MenuItem("Quit", callback=self.quit_app),
-        ]
+        # Build menu
+        self._build_menu()
 
         # Timer for updating stats display
         self.timer = rumps.Timer(self.update_stats_display, 1)
         self.timer.start()
+
+    def _discover_configs(self) -> list[str]:
+        """Discover available config-backend-*.yaml files."""
+        pattern = str(self.script_dir / "config-backend-*.yaml")
+        configs = sorted(glob.glob(pattern))
+        return [os.path.basename(c) for c in configs]
+
+    def _build_menu(self):
+        """Build the menu with discovered configs."""
+        # Stats item (non-clickable)
+        self.stats_item = rumps.MenuItem(f"Words ({self.stats_window_minutes}m): 0", callback=None)
+        self.stats_item.set_callback(None)
+
+        # Config submenu
+        self.config_menu = rumps.MenuItem("Start")
+        for config in self.configs:
+            # Display name: strip "config-backend-" prefix and ".yaml" suffix
+            display_name = config.replace("config-backend-", "").replace(".yaml", "")
+            item = rumps.MenuItem(display_name, callback=self._make_start_callback(config))
+            self.config_menu[display_name] = item
+
+        # Stop item (hidden initially)
+        self.stop_item = rumps.MenuItem("Stop", callback=self.stop)
+
+        # Current config display
+        self.current_config_item = rumps.MenuItem("Not running", callback=None)
+        self.current_config_item.set_callback(None)
+
+        self.menu = [
+            self.config_menu,
+            self.stop_item,
+            None,  # Separator
+            self.current_config_item,
+            self.stats_item,
+            None,  # Separator
+            rumps.MenuItem("Refresh Configs", callback=self.refresh_configs),
+            rumps.MenuItem("Quit", callback=self.quit_app),
+        ]
+
+        # Initially hide stop, show start
+        self.stop_item.set_callback(None)  # Disable initially
+
+    def _make_start_callback(self, config: str):
+        """Create a callback for starting with a specific config."""
+        def callback(_):
+            self.start(config)
+        return callback
+
+    def refresh_configs(self, _):
+        """Refresh the list of available configs."""
+        self.configs = self._discover_configs()
+        # Update submenu
+        self.config_menu.clear()
+        for config in self.configs:
+            display_name = config.replace("config-backend-", "").replace(".yaml", "")
+            item = rumps.MenuItem(display_name, callback=self._make_start_callback(config))
+            self.config_menu[display_name] = item
+        NSLog("TranscribeWidget: Refreshed configs, found %d", len(self.configs))
 
     def _set_icon(self, symbol_name: str):
         """Set menu bar icon using SF Symbol."""
@@ -90,46 +148,52 @@ class TranscribeWidget(rumps.App):
         """Set icon to active/recording state (waveform with circle)."""
         self._set_icon(self.ICON_ON)
 
-    def _load_config(self) -> dict:
-        """Load config from ~/.config/transcribe-widget/config.yaml"""
-        config_path = Path.home() / ".config" / "transcribe-widget" / "config.yaml"
+    def _load_widget_config(self) -> dict:
+        """Load widget config from TRANSCRIBE_WIDGET_CONFIG or ./config-widget.yaml"""
+        env_path = os.environ.get("TRANSCRIBE_WIDGET_CONFIG")
+        if env_path:
+            config_path = Path(env_path)
+        else:
+            config_path = self.script_dir / "config-widget.yaml"
+
         if config_path.exists():
             with open(config_path) as f:
                 return yaml.safe_load(f) or {}
         return {}
 
-    def toggle(self, _):
-        """Toggle transcription on/off."""
+    def start(self, config: str):
+        """Start the transcription pipeline with the given config."""
         if self.running:
-            self.stop()
-        else:
-            self.start()
+            self.stop(None)
 
-    def start(self):
-        """Start the transcription pipeline."""
-        if self.running:
-            return
+        self.current_config = config
+        command = f"{self.script_dir}/transcribe --config={config}"
 
-        NSLog("TranscribeWidget: Starting command: %@", self.command)
+        NSLog("TranscribeWidget: Starting with config: %@", config)
 
         try:
             self.process = subprocess.Popen(
-                self.command,
+                command,
                 shell=True,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,  # Capture stderr too for debugging
+                stderr=subprocess.PIPE,
                 text=True,
-                bufsize=1,  # Line buffered
+                bufsize=1,
+                cwd=str(self.script_dir),
             )
             self.running = True
             self._set_icon_on()
-            self.start_stop_item.title = "Stop"
 
-            # Start reader thread
+            # Update menu state
+            self.config_menu.title = "Running..."
+            self.stop_item.set_callback(self.stop)
+            display_name = config.replace("config-backend-", "").replace(".yaml", "")
+            self.current_config_item.title = f"Config: {display_name}"
+
+            # Start reader threads
             self.reader_thread = threading.Thread(target=self._read_output, daemon=True)
             self.reader_thread.start()
 
-            # Start stderr reader for debugging
             self.stderr_thread = threading.Thread(target=self._read_stderr, daemon=True)
             self.stderr_thread.start()
 
@@ -139,7 +203,7 @@ class TranscribeWidget(rumps.App):
             NSLog("TranscribeWidget: Failed to start: %@", str(e))
             rumps.alert("Error", f"Failed to start: {e}")
 
-    def stop(self):
+    def stop(self, _):
         """Stop the transcription pipeline."""
         if not self.running:
             return
@@ -156,7 +220,10 @@ class TranscribeWidget(rumps.App):
             self.process = None
 
         self._set_icon_off()
-        self.start_stop_item.title = "Start"
+        self.config_menu.title = "Start"
+        self.stop_item.set_callback(None)
+        self.current_config_item.title = "Not running"
+        self.current_config = None
         NSLog("TranscribeWidget: Stopped")
 
     def _read_stderr(self):
@@ -184,11 +251,16 @@ class TranscribeWidget(rumps.App):
 
             try:
                 data = json.loads(line)
+                speaker = data.get("speaker", "")
                 text = data.get("text", "")
                 word_count = len(text.split())
 
                 with self.lock:
                     self.word_counts.append((datetime.now(), word_count))
+
+                # Output simplified format to stdout
+                if text:
+                    print(f"[{speaker}] {text}", flush=True)
 
             except json.JSONDecodeError:
                 # Not valid JSON, skip
@@ -204,7 +276,9 @@ class TranscribeWidget(rumps.App):
                 self.running = False
                 self.process = None
                 self._set_icon_off()
-                self.start_stop_item.title = "Start"
+                self.config_menu.title = "Start"
+                self.stop_item.set_callback(None)
+                self.current_config_item.title = "Not running"
 
     def update_stats_display(self, _):
         """Update the stats display in the menu."""
@@ -233,13 +307,13 @@ class TranscribeWidget(rumps.App):
         if self.running and total_words > 0:
             self.title = str(total_words)
         elif self.running:
-            self.title = ""  # Just show icon when recording but no words yet
+            self.title = ""
         else:
-            self.title = ""  # Just show icon when stopped
+            self.title = ""
 
     def quit_app(self, _):
         """Clean shutdown."""
-        self.stop()
+        self.stop(None)
         rumps.quit_application()
 
 

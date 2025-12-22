@@ -9,6 +9,7 @@ import numpy as np
 
 from .asr import Transcriber
 from .diarize import Diarizer, SpeakerSegment
+from transcribe_shared import aggregate_consecutive
 
 
 @dataclass
@@ -20,6 +21,7 @@ class DiarizedTranscript:
     start: float  # Start time relative to batch
     end: float  # End time relative to batch
     batch_timestamp: datetime  # When the batch started (wall clock)
+    confidence: float = 1.0  # Speaker match confidence (0.0-1.0)
 
 
 class SpeakerRegistry:
@@ -35,8 +37,12 @@ class SpeakerRegistry:
         self.speakers: dict[int, dict] = {}  # id → {embedding, last_seen}
         self.next_id = 0
 
-    def identify(self, embedding: np.ndarray, timestamp: datetime) -> int:
-        """Match embedding to existing speaker or create new one."""
+    def identify(self, embedding: np.ndarray, timestamp: datetime) -> tuple[int, float]:
+        """Match embedding to existing speaker or create new one.
+
+        Returns:
+            Tuple of (speaker_id, confidence_score)
+        """
         self._expire_inactive(timestamp)
 
         # Find best match using cosine similarity
@@ -49,12 +55,17 @@ class SpeakerRegistry:
         # Match existing or create new
         if best_score >= self.threshold and best_id is not None:
             self.speakers[best_id]["last_seen"] = timestamp
-            return best_id
+            print(f"    Speaker match: SPEAKER_{best_id:02d} (score={best_score:.3f})", file=sys.stderr)
+            return best_id, best_score
 
         new_id = self.next_id
         self.next_id += 1
         self.speakers[new_id] = {"embedding": embedding, "last_seen": timestamp}
-        return new_id
+        if best_id is not None:
+            print(f"    New speaker: SPEAKER_{new_id:02d} (best_score={best_score:.3f} < {self.threshold})", file=sys.stderr)
+        else:
+            print(f"    First speaker: SPEAKER_{new_id:02d}", file=sys.stderr)
+        return new_id, 1.0  # New speaker has confidence 1.0
 
     def _cosine_similarity(self, a: np.ndarray, b: np.ndarray) -> float:
         """Compute cosine similarity between two vectors."""
@@ -92,6 +103,7 @@ class Pipeline:
         huggingface_token: Optional[str] = None,
         speaker_similarity_threshold: float = 0.75,
         speaker_inactivity_timeout: float = 1800.0,
+        ignore_words: Optional[list[str]] = None,
     ):
         """
         Initialize pipeline.
@@ -102,8 +114,9 @@ class Pipeline:
             huggingface_token: HuggingFace token for pyannote
             speaker_similarity_threshold: Cosine similarity threshold for speaker matching
             speaker_inactivity_timeout: Seconds of inactivity before speaker ID expires
+            ignore_words: Words to always filter from transcripts
         """
-        self.transcriber = Transcriber(model=whisper_model)
+        self.transcriber = Transcriber(model=whisper_model, ignore_words=ignore_words)
         self.diarizer = Diarizer(
             model=diarization_model,
             huggingface_token=huggingface_token,
@@ -166,10 +179,12 @@ class Pipeline:
 
             # Get persistent speaker ID from registry
             embedding = embeddings.get(seg.speaker)
+            confidence = 1.0
             if embedding is not None:
-                persistent_id = self.speaker_registry.identify(embedding, batch_timestamp)
+                persistent_id, confidence = self.speaker_registry.identify(embedding, batch_timestamp)
                 speaker_label = f"SPEAKER_{persistent_id:02d}"
             else:
+                print(f"    WARNING: No embedding for {seg.speaker}", file=sys.stderr)
                 speaker_label = seg.speaker  # Fallback to batch-local label
 
             # Transcribe
@@ -183,8 +198,33 @@ class Pipeline:
                         start=seg.start,
                         end=seg.end,
                         batch_timestamp=batch_timestamp,
+                        confidence=confidence,
                     )
                 )
 
         print(f"  Transcribed {len(results)} segments", file=sys.stderr)
-        return results
+
+        # Step 3: Aggregate consecutive same-speaker segments
+        def merge_transcripts(a: DiarizedTranscript, b: DiarizedTranscript) -> DiarizedTranscript:
+            return DiarizedTranscript(
+                speaker=a.speaker,
+                text=a.text + " " + b.text,
+                start=a.start,
+                end=b.end,
+                batch_timestamp=a.batch_timestamp,
+                confidence=min(a.confidence, b.confidence),
+            )
+
+        aggregated = aggregate_consecutive(
+            results,
+            get_speaker=lambda t: t.speaker,
+            get_text=lambda t: t.text,
+            get_start=lambda t: t.start,
+            get_end=lambda t: t.end,
+            merge=merge_transcripts,
+        )
+
+        if len(aggregated) < len(results):
+            print(f"  Aggregated to {len(aggregated)} utterances", file=sys.stderr)
+
+        return aggregated

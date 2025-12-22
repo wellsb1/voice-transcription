@@ -65,6 +65,7 @@ def main() -> int:
     transcriber = Transcriber(
         model_name=config.whisper_model,
         compute_type=config.whisper_compute_type,
+        ignore_words=config.ignore_words,
     )
     transcriber.load()
 

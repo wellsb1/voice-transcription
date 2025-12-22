@@ -6,6 +6,8 @@ from typing import Optional
 
 import numpy as np
 
+from transcribe_shared.transcript_filter import is_garbage_transcript
+
 
 @dataclass
 class TranscriptSegment:
@@ -26,14 +28,17 @@ class Transcriber:
     def __init__(
         self,
         model: str = "mlx-community/whisper-large-v3-turbo",
+        ignore_words: Optional[list[str]] = None,
     ):
         """
         Initialize transcriber.
 
         Args:
             model: Model name/path for mlx-whisper (HuggingFace format)
+            ignore_words: Words to always filter from transcripts
         """
         self.model_name = model
+        self.ignore_words = ignore_words or []
         self._loaded = False
 
     def load(self) -> None:
@@ -81,7 +86,7 @@ class Transcriber:
         segments = []
         for seg in result.get("segments", []):
             text = seg.get("text", "").strip()
-            if text:
+            if text and not is_garbage_transcript(text, self.ignore_words):
                 segments.append(
                     TranscriptSegment(
                         text=text,
@@ -118,4 +123,5 @@ class Transcriber:
             language="en",
         )
 
-        return result.get("text", "").strip()
+        text = result.get("text", "").strip()
+        return "" if is_garbage_transcript(text, self.ignore_words) else text

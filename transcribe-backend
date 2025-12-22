@@ -1,0 +1,37 @@
+#!/bin/bash
+# Unified transcription launcher - picks backend from config.yaml
+# Set TRANSCRIBE_BACKEND env var or edit config.yaml to change backend
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
+
+# Source .env if present (set -a exports all variables)
+if [ -f "$SCRIPT_DIR/.env" ]; then
+    set -a
+    source "$SCRIPT_DIR/.env"
+    set +a
+fi
+
+# Detect backend from config.yaml or env
+BACKEND="${TRANSCRIBE_BACKEND:-}"
+if [ -z "$BACKEND" ] && [ -f config.yaml ]; then
+    BACKEND=$(grep -E "^backend:" config.yaml | sed 's/.*:[[:space:]]*//' | tr -d '"'"'" | tr -d ' ')
+fi
+BACKEND="${BACKEND:-m4}"
+
+case "$BACKEND" in
+    m4)
+        exec "$SCRIPT_DIR/transcribe-m4" "$@"
+        ;;
+    whisper)
+        exec "$SCRIPT_DIR/transcribe-whisper" "$@"
+        ;;
+    sherpa)
+        exec "$SCRIPT_DIR/transcribe-sherpa" "$@"
+        ;;
+    *)
+        echo "Unknown backend: $BACKEND" >&2
+        echo "Valid backends: m4, whisper, sherpa" >&2
+        exit 1
+        ;;
+esac

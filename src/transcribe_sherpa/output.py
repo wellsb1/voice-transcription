@@ -75,7 +75,10 @@ class JsonlOutput:
         base_timestamp: datetime = None,
     ) -> None:
         """
-        Write multiple transcript segments.
+        Write multiple transcript segments aggregated into one line.
+
+        Combines all segments into a single utterance since they share
+        the same speaker within a chunk.
 
         Args:
             segments: List of {"text": str, "start": float, "end": float}
@@ -88,16 +91,22 @@ class JsonlOutput:
         if base_timestamp is None:
             base_timestamp = datetime.now()
 
+        # Aggregate all segment texts into one utterance
+        texts = []
         for segment in segments:
             text = segment.get("text", "").strip()
-            if not text:
-                continue
+            if text:
+                texts.append(text)
 
-            self.write(
-                text=text,
-                speaker_id=speaker_id,
-                confidence=confidence,
-                rms=rms,
-                db=db,
-                timestamp=base_timestamp,
-            )
+        if not texts:
+            return
+
+        combined_text = " ".join(texts)
+        self.write(
+            text=combined_text,
+            speaker_id=speaker_id,
+            confidence=confidence,
+            rms=rms,
+            db=db,
+            timestamp=base_timestamp,
+        )
