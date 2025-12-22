@@ -3,7 +3,8 @@
 
 # Auto-start with this config on launch (null = don't auto-start)
 # Example: "config-backend-m4.yaml" or just "m4"
-auto_start: m4
+# Supports ${ENV_VAR:-default} syntax - set WIDGET_AUTO_START in .env to override
+auto_start: ${WIDGET_AUTO_START:-null}
 
 # Rolling window for word count stats (minutes)
 stats_window_minutes: 5

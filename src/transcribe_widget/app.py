@@ -11,7 +11,8 @@ from pathlib import Path
 from typing import Optional
 
 import rumps
-import yaml
+
+from transcribe_shared.config import load_yaml
 
 # PyObjC for SF Symbols
 from AppKit import NSImage
@@ -195,10 +196,7 @@ class TranscribeWidget(rumps.App):
         else:
             config_path = self.script_dir / "config-widget.yaml"
 
-        if config_path.exists():
-            with open(config_path) as f:
-                return yaml.safe_load(f) or {}
-        return {}
+        return load_yaml(config_path)
 
     def start(self, config: str):
         """Start the transcription pipeline with the given config."""
@@ -297,9 +295,9 @@ class TranscribeWidget(rumps.App):
                 with self.lock:
                     self.word_counts.append((datetime.now(), word_count))
 
-                # Output simplified format to stdout
+                # Log detection metadata (no content for privacy)
                 if text:
-                    print(f"[{speaker}] {text}", flush=True)
+                    NSLog("TranscribeWidget: [%@] %d words", speaker, word_count)
 
             except json.JSONDecodeError:
                 # Not valid JSON, skip

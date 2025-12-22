@@ -39,6 +39,8 @@ ENV/
 .env
 # Runtime data (speakers.json, queue/)
 data/
+# Transcript logs
+.transcripts/
 # Downloaded ML models
 models/
 # Claude Code session data

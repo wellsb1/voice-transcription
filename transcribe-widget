@@ -14,9 +14,9 @@ if [ ! -f "$VENV_DIR/bin/activate" ]; then
 else
     source "$VENV_DIR/bin/activate"
     # Check for widget-specific deps
-    if ! python3 -c "import rumps" 2>/dev/null; then
+    if ! "$VENV_DIR/bin/python3" -c "import rumps" 2>/dev/null; then
         echo "Installing widget dependencies..."
-        pip install rumps pyobjc
+        "$VENV_DIR/bin/pip" install rumps pyobjc
     fi
 fi
 
@@ -27,4 +27,4 @@ if [ -f "$SCRIPT_DIR/.env" ]; then
     set +a
 fi
 
-PYTHONPATH="$SCRIPT_DIR/src" python3 -m transcribe_widget "$@"
+PYTHONPATH="$SCRIPT_DIR/src" "$VENV_DIR/bin/python3" -m transcribe_widget "$@"

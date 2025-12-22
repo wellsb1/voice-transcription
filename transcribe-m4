@@ -3,16 +3,15 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 VENV_DIR="$SCRIPT_DIR/venv-m4"
+PYTHON="$VENV_DIR/bin/python3"
+PIP="$VENV_DIR/bin/pip"
 
 # Auto-setup venv if missing
-if [ ! -f "$VENV_DIR/bin/activate" ]; then
+if [ ! -f "$PYTHON" ]; then
     echo "Setting up venv-m4..."
     python3 -m venv "$VENV_DIR"
-    source "$VENV_DIR/bin/activate"
-    pip install --upgrade pip
-    pip install numpy torch torchaudio sounddevice pyyaml mlx-whisper pyannote.audio
-else
-    source "$VENV_DIR/bin/activate"
+    "$PIP" install --upgrade pip
+    "$PIP" install numpy torch torchaudio sounddevice pyyaml mlx-whisper pyannote.audio
 fi
 
 # Source .env if present (set -a exports all variables)
@@ -22,4 +21,4 @@ if [ -f "$SCRIPT_DIR/.env" ]; then
     set +a
 fi
 
-PYTHONPATH="$SCRIPT_DIR/src" python3 -m transcribe_m4 "$@"
+PYTHONPATH="$SCRIPT_DIR/src" exec "$PYTHON" -m transcribe_m4 "$@"

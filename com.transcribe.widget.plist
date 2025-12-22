@@ -18,11 +18,5 @@
 
     <key>KeepAlive</key>
     <false/>
-
-    <key>StandardOutPath</key>
-    <string>/tmp/transcribe-widget.log</string>
-
-    <key>StandardErrorPath</key>
-    <string>/tmp/transcribe-widget.log</string>
 </dict>
 </plist>
