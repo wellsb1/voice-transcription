@@ -23,6 +23,8 @@ wheels/
 # Virtual environments
 venv/
 venv-m4/
+venv-whisper/
+venv-sherpa/
 ENV/
 .venv/
 
@@ -35,7 +37,9 @@ ENV/
 # Project-specific
 # User configs (use .example.yaml templates)
 config.yaml
-config.m4.yaml
+config-m4.yaml
+config-whisper.yaml
+config-sherpa.yaml
 # Runtime data (speakers.json, queue/)
 data/
 # Downloaded ML models

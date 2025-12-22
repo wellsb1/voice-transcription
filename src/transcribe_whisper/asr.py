@@ -14,7 +14,7 @@ class Transcriber:
 
     def __init__(
         self,
-        model_name: str = "tiny.en",
+        model_name: str = "medium.en",
         device: str = "cpu",
         compute_type: str = "int8",
     ):
@@ -22,7 +22,7 @@ class Transcriber:
         Initialize transcriber.
 
         Args:
-            model_name: Whisper model size (tiny.en, base.en, small.en, etc.)
+            model_name: Whisper model size (tiny.en, base.en, small.en, medium.en)
             device: Device to run on ("cpu" or "cuda")
             compute_type: Compute type ("int8", "float16", "float32")
         """
@@ -68,12 +68,14 @@ class Transcriber:
         results = []
         for segment in segments:
             text = segment.text.strip()
-            if text:  # Skip empty segments
-                results.append({
-                    "start": segment.start,
-                    "end": segment.end,
-                    "text": text,
-                })
+            if text:
+                results.append(
+                    {
+                        "start": segment.start,
+                        "end": segment.end,
+                        "text": text,
+                    }
+                )
 
         return results
 
@@ -111,11 +113,13 @@ class Transcriber:
                         }
                         for w in segment.words
                     ]
-                results.append({
-                    "start": segment.start,
-                    "end": segment.end,
-                    "text": text,
-                    "words": words,
-                })
+                results.append(
+                    {
+                        "start": segment.start,
+                        "end": segment.end,
+                        "text": text,
+                        "words": words,
+                    }
+                )
 
         return results

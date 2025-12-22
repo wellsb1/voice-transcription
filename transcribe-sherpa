@@ -1,0 +1,6 @@
+#!/bin/bash
+# Sherpa-onnx transcription with 3D-Speaker embeddings
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/venv-sherpa/bin/activate" 2>/dev/null || source "$SCRIPT_DIR/venv/bin/activate"
+cd "$SCRIPT_DIR"
+PYTHONPATH="$SCRIPT_DIR/src" python3 -m transcribe_sherpa "$@"

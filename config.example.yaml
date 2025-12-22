@@ -1,53 +1,9 @@
-# Voice Transcription Configuration
-# Copy this file to config.yaml and customize as needed.
+# Transcription Backend Selection
+# This file only selects which backend to use.
+# Each backend has its own config file: config-m4.yaml, config-whisper.yaml, config-sherpa.yaml
 
-# Backend selection
-# - "whisper": faster-whisper + SpeechBrain ECAPA-TDNN (default, good for CPU)
-# - "sherpa": sherpa-onnx (better for mobile/NPU, requires model download)
-backend: "whisper"
-
-# Device identification - appears in JSONL output
-device_name: "office"
-
-# Audio settings
-audio_device: null  # null = system default, or device name/index (run with --list-devices)
-sample_rate: 16000
-
-# VAD-aware chunking settings
-# Chunks on silence boundaries to avoid cutting words in half
-vad_threshold: 0.85          # 0.0-1.0, higher = less sensitive (filters more noise)
-silence_duration: 0.5        # Seconds of silence to trigger chunk boundary
-min_chunk_duration: 2.0      # Minimum chunk size for reliable speaker embedding
-max_chunk_duration: 30.0     # Force chunk even if no silence (handles monologues)
-min_audio_energy: 0.01       # Minimum RMS energy to process (filters quiet noise)
-min_speech_duration: 0.4     # Minimum seconds of speech required in chunk
-
-# Shared model settings (can be overridden per-backend below)
-whisper_model: "medium.en"  # Options: tiny.en, base.en, small.en, medium.en
-speaker_similarity_threshold: 0.35  # 0.0-1.0, lower = more likely to match same speaker
-
-# Speaker identification
-speaker_reset_timeout: 900          # Reset speakers after N seconds of silence (900 = 15 min)
-speaker_registry_path: "./data/speakers.json"
-
-# Queue settings (disk-backed audio buffer)
-queue_dir: "./data/queue"
-
-# =============================================================================
-# Backend-specific settings
-# These override shared settings when the corresponding backend is selected.
-# =============================================================================
-
-# Whisper backend settings (faster-whisper ASR + SpeechBrain ECAPA-TDNN speaker embeddings)
-whisper:
-  # whisper_model: "small.en"              # Use different model for whisper
-  # speaker_similarity_threshold: 0.40     # Tune threshold separately
-  whisper_compute_type: "int8"             # int8, float16, int8_float16
-
-# Sherpa backend settings (sherpa-onnx ASR + 3D-Speaker ERes2Net speaker embeddings)
-sherpa:
-  # whisper_model: "medium.en"             # Use different model for sherpa
-  # speaker_similarity_threshold: 0.35    # Tune threshold separately
-  sherpa_use_int8: false                   # Use INT8 quantized models (faster)
-  sherpa_provider: "cpu"                   # cpu, cuda, coreml (macOS GPU)
-  sherpa_num_threads: 4                    # CPU threads for inference
+# Available backends:
+#   m4      - Mac Mini M4 with mlx-whisper and pyannote (Apple Silicon optimized)
+#   whisper - faster-whisper with ECAPA-TDNN (CPU/CUDA)
+#   sherpa  - sherpa-onnx (cross-platform, mobile-friendly)
+backend: "m4"

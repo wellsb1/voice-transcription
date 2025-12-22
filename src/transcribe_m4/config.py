@@ -92,7 +92,7 @@ def load_config(config_path: Optional[Path] = None) -> Config:
 
     # Load YAML config
     if config_path is None:
-        config_path = Path("config.m4.yaml")
+        config_path = Path("config-m4.yaml")
     config.update(load_yaml_config(config_path))
 
     # Apply env overrides

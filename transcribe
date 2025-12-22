@@ -1,3 +1,33 @@
 #!/bin/bash
-# Wrapper script to run transcribe without activating venv
-exec "$(dirname "$0")/venv/bin/python" -m transcribe "$@"
+# Unified transcription launcher - picks backend from config.yaml
+# Set TRANSCRIBE_BACKEND env var or edit config.yaml to change backend
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
+
+# Detect backend from config.yaml or env
+BACKEND="${TRANSCRIBE_BACKEND:-}"
+if [ -z "$BACKEND" ] && [ -f config.yaml ]; then
+    BACKEND=$(grep -E "^backend:" config.yaml | sed 's/.*:[[:space:]]*//' | tr -d '"'"'" | tr -d ' ')
+fi
+BACKEND="${BACKEND:-m4}"
+
+case "$BACKEND" in
+    m4)
+        source "$SCRIPT_DIR/venv-m4/bin/activate"
+        PYTHONPATH="$SCRIPT_DIR/src" python3 -m transcribe_m4 "$@"
+        ;;
+    whisper)
+        source "$SCRIPT_DIR/venv-whisper/bin/activate" 2>/dev/null || source "$SCRIPT_DIR/venv/bin/activate"
+        PYTHONPATH="$SCRIPT_DIR/src" python3 -m transcribe_whisper "$@"
+        ;;
+    sherpa)
+        source "$SCRIPT_DIR/venv-sherpa/bin/activate" 2>/dev/null || source "$SCRIPT_DIR/venv/bin/activate"
+        PYTHONPATH="$SCRIPT_DIR/src" python3 -m transcribe_sherpa "$@"
+        ;;
+    *)
+        echo "Unknown backend: $BACKEND" >&2
+        echo "Valid backends: m4, whisper, sherpa" >&2
+        exit 1
+        ;;
+esac

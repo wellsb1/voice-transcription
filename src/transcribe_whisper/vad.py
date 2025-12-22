@@ -1,6 +1,5 @@
 """Voice Activity Detection using Silero VAD."""
 
-from typing import Optional
 import numpy as np
 import torch
 
@@ -35,7 +34,6 @@ class VoiceActivityDetector:
             model="silero_vad",
             trust_repo=True,
         )
-        # Get utility functions
         (
             self._get_speech_timestamps,
             self._save_audio,
@@ -56,10 +54,8 @@ class VoiceActivityDetector:
         """
         self._load_model()
 
-        # Convert to tensor
         audio_tensor = torch.tensor(audio, dtype=torch.float32)
 
-        # Get speech timestamps
         speech_timestamps = self._get_speech_timestamps(
             audio_tensor,
             self._model,

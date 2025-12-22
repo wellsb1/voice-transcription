@@ -7,9 +7,8 @@ import torch
 import torchaudio
 
 # Monkey-patch for torchaudio 2.9+ compatibility with speechbrain
-# The list_audio_backends() function was removed in newer versions
-if not hasattr(torchaudio, 'list_audio_backends'):
-    torchaudio.list_audio_backends = lambda: ['soundfile', 'sox']
+if not hasattr(torchaudio, "list_audio_backends"):
+    torchaudio.list_audio_backends = lambda: ["soundfile", "sox"]
 
 
 class SpeakerEmbedding:
@@ -89,7 +88,7 @@ class SpeakerEmbedding:
             segment_audio = audio[start_sample:end_sample]
 
             # Skip very short segments
-            if len(segment_audio) < sample_rate * 0.5:  # Less than 0.5 seconds
+            if len(segment_audio) < sample_rate * 0.5:
                 continue
 
             embedding = self.extract(segment_audio, sample_rate)

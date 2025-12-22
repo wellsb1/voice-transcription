@@ -1,0 +1,32 @@
+# Sherpa-ONNX Backend Configuration
+# Uses sherpa-onnx for cross-platform inference with ONNX Runtime
+
+# Device identification
+device_name: "sherpa-device"
+
+# Audio settings
+audio_device: null  # null = system default, or device name/index
+sample_rate: 16000  # 16kHz required for Whisper
+
+# VAD-aware chunking settings
+vad_threshold: 0.5  # Detection threshold (0.0-1.0)
+silence_duration: 0.5  # Seconds of silence to trigger chunk boundary
+min_chunk_duration: 2.0  # Minimum chunk size for reliable processing
+max_chunk_duration: 30.0  # Force chunk even without silence
+min_audio_energy: 0.01  # Minimum RMS energy to process
+min_speech_duration: 0.4  # Minimum seconds of speech required
+
+# Sherpa model settings
+# Options: tiny.en, base.en, small.en, medium.en
+whisper_model: "small.en"
+sherpa_use_int8: false  # Use INT8 quantized models
+sherpa_provider: "cpu"  # cpu, cuda, coreml
+sherpa_num_threads: 4  # CPU threads for inference
+models_dir: "./models/sherpa"  # Directory containing sherpa models
+
+# Speaker identification
+speaker_similarity_threshold: 0.75  # Cosine similarity for speaker matching
+speaker_inactivity_timeout: 1800.0  # Reset after 30 min silence (seconds)
+
+# Queue settings
+queue_dir: "./data/queue-sherpa"
