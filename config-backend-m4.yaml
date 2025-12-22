@@ -30,8 +30,8 @@ speaker_similarity_threshold: 0.75   # Cosine similarity for speaker matching
 speaker_inactivity_timeout: 1800.0   # Reset speaker IDs after 30 min silence (seconds)
 
 # Audio settings
-audio_device: null              # null = system default input, or device name/index
-audio_output_device: null       # null = system default output (for --debug playback)
+audio_device: ${AUDIO_DEVICE:-null}              # null = system default input, or device name/index
+audio_output_device: ${AUDIO_OUTPUT_DEVICE:-null}  # null = system default output (for --debug playback)
 sample_rate: 16000              # 16kHz required for Whisper
 
 # Output
