@@ -1,0 +1,251 @@
+"""Menu bar widget for transcription control and monitoring."""
+
+import json
+import subprocess
+import threading
+from collections import deque
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Optional
+
+import rumps
+import yaml
+
+# PyObjC for SF Symbols
+from AppKit import NSImage
+from Foundation import NSLog
+
+
+def sf_symbol(name: str, size: float = 18.0) -> NSImage:
+    """Get an SF Symbol as NSImage."""
+    from AppKit import NSFontWeightRegular, NSImageSymbolConfiguration
+
+    img = NSImage.imageWithSystemSymbolName_accessibilityDescription_(name, None)
+    if img:
+        # Configure size
+        config = NSImageSymbolConfiguration.configurationWithPointSize_weight_(size, NSFontWeightRegular)
+        img = img.imageWithSymbolConfiguration_(config)
+        img.setTemplate_(True)  # Makes it adapt to light/dark menu bar
+    return img
+
+
+class TranscribeWidget(rumps.App):
+    """Menu bar app for controlling transcription pipeline."""
+
+    # SF Symbol names
+    ICON_OFF = "waveform"
+    ICON_ON = "waveform.circle.fill"
+
+    def __init__(self):
+        # Start with text, will set icon after app starts
+        super().__init__("~", quit_button=None)
+        self._icon_initialized = False
+
+        # Load config
+        self.config = self._load_config()
+        self.command = self.config.get("command", "./transcribe-m4")
+        self.stats_window_minutes = self.config.get("stats_window_minutes", 5)
+
+        # Process state
+        self.process: Optional[subprocess.Popen] = None
+        self.reader_thread: Optional[threading.Thread] = None
+        self.running = False
+
+        # Stats tracking: list of (timestamp, word_count) tuples
+        self.word_counts: deque = deque()
+        self.lock = threading.Lock()
+
+        # Menu items
+        self.start_stop_item = rumps.MenuItem("Start", callback=self.toggle)
+        self.stats_item = rumps.MenuItem("Words (5m): 0", callback=None)
+        self.stats_item.set_callback(None)  # Non-clickable
+
+        self.menu = [
+            self.start_stop_item,
+            None,  # Separator
+            self.stats_item,
+            None,  # Separator
+            rumps.MenuItem("Quit", callback=self.quit_app),
+        ]
+
+        # Timer for updating stats display
+        self.timer = rumps.Timer(self.update_stats_display, 1)
+        self.timer.start()
+
+    def _set_icon(self, symbol_name: str):
+        """Set menu bar icon using SF Symbol."""
+        try:
+            button = self._nsapp.nsstatusitem.button()
+            button.setImage_(sf_symbol(symbol_name))
+            self.title = ""  # Clear text when using icon
+        except AttributeError:
+            # App not fully initialized yet
+            pass
+
+    def _set_icon_off(self):
+        """Set icon to inactive state (waveform)."""
+        self._set_icon(self.ICON_OFF)
+
+    def _set_icon_on(self):
+        """Set icon to active/recording state (waveform with circle)."""
+        self._set_icon(self.ICON_ON)
+
+    def _load_config(self) -> dict:
+        """Load config from ~/.config/transcribe-widget/config.yaml"""
+        config_path = Path.home() / ".config" / "transcribe-widget" / "config.yaml"
+        if config_path.exists():
+            with open(config_path) as f:
+                return yaml.safe_load(f) or {}
+        return {}
+
+    def toggle(self, _):
+        """Toggle transcription on/off."""
+        if self.running:
+            self.stop()
+        else:
+            self.start()
+
+    def start(self):
+        """Start the transcription pipeline."""
+        if self.running:
+            return
+
+        NSLog("TranscribeWidget: Starting command: %@", self.command)
+
+        try:
+            self.process = subprocess.Popen(
+                self.command,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,  # Capture stderr too for debugging
+                text=True,
+                bufsize=1,  # Line buffered
+            )
+            self.running = True
+            self._set_icon_on()
+            self.start_stop_item.title = "Stop"
+
+            # Start reader thread
+            self.reader_thread = threading.Thread(target=self._read_output, daemon=True)
+            self.reader_thread.start()
+
+            # Start stderr reader for debugging
+            self.stderr_thread = threading.Thread(target=self._read_stderr, daemon=True)
+            self.stderr_thread.start()
+
+            NSLog("TranscribeWidget: Started successfully")
+
+        except Exception as e:
+            NSLog("TranscribeWidget: Failed to start: %@", str(e))
+            rumps.alert("Error", f"Failed to start: {e}")
+
+    def stop(self):
+        """Stop the transcription pipeline."""
+        if not self.running:
+            return
+
+        NSLog("TranscribeWidget: Stopping...")
+        self.running = False
+
+        if self.process:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+            self.process = None
+
+        self._set_icon_off()
+        self.start_stop_item.title = "Start"
+        NSLog("TranscribeWidget: Stopped")
+
+    def _read_stderr(self):
+        """Read stderr from process for debugging."""
+        if not self.process or not self.process.stderr:
+            return
+
+        for line in self.process.stderr:
+            if not self.running:
+                break
+            NSLog("TranscribeWidget stderr: %@", line.strip())
+
+    def _read_output(self):
+        """Read stdout from process and parse JSONL for stats."""
+        if not self.process or not self.process.stdout:
+            return
+
+        for line in self.process.stdout:
+            if not self.running:
+                break
+
+            line = line.strip()
+            if not line:
+                continue
+
+            try:
+                data = json.loads(line)
+                text = data.get("text", "")
+                word_count = len(text.split())
+
+                with self.lock:
+                    self.word_counts.append((datetime.now(), word_count))
+
+            except json.JSONDecodeError:
+                # Not valid JSON, skip
+                pass
+
+    def _check_process_alive(self):
+        """Check if the subprocess is still running."""
+        if self.running and self.process:
+            exit_code = self.process.poll()
+            if exit_code is not None:
+                # Process died
+                NSLog("TranscribeWidget: Process exited with code %d", exit_code)
+                self.running = False
+                self.process = None
+                self._set_icon_off()
+                self.start_stop_item.title = "Start"
+
+    def update_stats_display(self, _):
+        """Update the stats display in the menu."""
+        # Initialize icon on first timer tick (app is now fully loaded)
+        if not self._icon_initialized:
+            self._set_icon_off()
+            self._icon_initialized = True
+
+        # Check if process died
+        self._check_process_alive()
+
+        now = datetime.now()
+        cutoff = now - timedelta(minutes=self.stats_window_minutes)
+
+        with self.lock:
+            # Remove old entries
+            while self.word_counts and self.word_counts[0][0] < cutoff:
+                self.word_counts.popleft()
+
+            # Sum recent words
+            total_words = sum(count for _, count in self.word_counts)
+
+        self.stats_item.title = f"Words ({self.stats_window_minutes}m): {total_words}"
+
+        # Show word count next to icon if running and has words
+        if self.running and total_words > 0:
+            self.title = str(total_words)
+        elif self.running:
+            self.title = ""  # Just show icon when recording but no words yet
+        else:
+            self.title = ""  # Just show icon when stopped
+
+    def quit_app(self, _):
+        """Clean shutdown."""
+        self.stop()
+        rumps.quit_application()
+
+
+def main():
+    TranscribeWidget().run()
+
+
+if __name__ == "__main__":
+    main()

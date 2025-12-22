@@ -1,0 +1,6 @@
+#!/bin/bash
+# Transcript logger - reads stdin, writes to rolling files, passes through to stdout
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/venv-m4/bin/activate"
+cd "$SCRIPT_DIR"
+PYTHONPATH="$SCRIPT_DIR/src" python3 -m transcribe_logger "$@"

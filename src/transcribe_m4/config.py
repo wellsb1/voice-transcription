@@ -98,4 +98,8 @@ def load_config(config_path: Optional[Path] = None) -> Config:
     # Apply env overrides
     config = apply_env_overrides(config)
 
+    # Remove keys not in Config dataclass (e.g., 'logs' section used by other tools)
+    valid_keys = {f.name for f in Config.__dataclass_fields__.values()}
+    config = {k: v for k, v in config.items() if k in valid_keys}
+
     return Config(**config)

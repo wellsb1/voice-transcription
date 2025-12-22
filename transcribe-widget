@@ -1,0 +1,5 @@
+#!/bin/bash
+# Menu bar widget for transcription control
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/venv-m4/bin/activate"
+PYTHONPATH="$SCRIPT_DIR/src" python3 -m transcribe_widget "$@"
