@@ -49,6 +49,7 @@ class TranscribeWidget(rumps.App):
         # Load widget config
         self.widget_config = self._load_widget_config()
         self.stats_window_minutes = self.widget_config.get("stats_window_minutes", 5)
+        self.auto_start = self.widget_config.get("auto_start", None)
 
         # Current config being used
         self.current_config: Optional[str] = None
@@ -72,11 +73,49 @@ class TranscribeWidget(rumps.App):
         self.timer = rumps.Timer(self.update_stats_display, 1)
         self.timer.start()
 
+        # Auto-start if configured (delayed to let UI initialize)
+        if self.auto_start:
+            self.auto_start_timer = rumps.Timer(self._do_auto_start, 1)
+            self.auto_start_timer.start()
+
     def _discover_configs(self) -> list[str]:
         """Discover available config-backend-*.yaml files."""
         pattern = str(self.script_dir / "config-backend-*.yaml")
         configs = sorted(glob.glob(pattern))
         return [os.path.basename(c) for c in configs]
+
+    def _resolve_config(self, name: str) -> Optional[str]:
+        """
+        Resolve a config name to full filename.
+
+        Accepts:
+            - Full name: "config-backend-m4.yaml"
+            - Short name: "m4"
+
+        Returns:
+            Full config filename or None if not found
+        """
+        # Already a full name
+        if name in self.configs:
+            return name
+
+        # Try as short name
+        full_name = f"config-backend-{name}.yaml"
+        if full_name in self.configs:
+            return full_name
+
+        return None
+
+    def _do_auto_start(self, timer):
+        """Auto-start with configured config (runs once)."""
+        timer.stop()
+
+        config = self._resolve_config(self.auto_start)
+        if config:
+            NSLog("TranscribeWidget: Auto-starting with %@", config)
+            self.start(config)
+        else:
+            NSLog("TranscribeWidget: Auto-start config not found: %@", self.auto_start)
 
     def _build_menu(self):
         """Build the menu with discovered configs."""

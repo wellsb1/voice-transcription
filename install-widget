@@ -1,0 +1,37 @@
+#!/bin/bash
+# Install the transcribe widget as a macOS Launch Agent (runs on login)
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PLIST_NAME="com.transcribe.widget.plist"
+PLIST_SRC="$SCRIPT_DIR/$PLIST_NAME"
+PLIST_DST="$HOME/Library/LaunchAgents/$PLIST_NAME"
+
+# Check if plist exists
+if [ ! -f "$PLIST_SRC" ]; then
+    echo "Error: $PLIST_SRC not found"
+    exit 1
+fi
+
+# Create LaunchAgents directory if needed
+mkdir -p "$HOME/Library/LaunchAgents"
+
+# Unload if already loaded
+if launchctl list | grep -q "com.transcribe.widget"; then
+    echo "Unloading existing launch agent..."
+    launchctl unload "$PLIST_DST" 2>/dev/null
+fi
+
+# Copy plist
+echo "Installing launch agent..."
+cp "$PLIST_SRC" "$PLIST_DST"
+
+# Load the agent
+echo "Loading launch agent..."
+launchctl load "$PLIST_DST"
+
+echo ""
+echo "Widget installed successfully!"
+echo "  - Starts automatically on login"
+echo "  - Logs: /tmp/transcribe-widget.log"
+echo ""
+echo "To uninstall: ./uninstall-widget"

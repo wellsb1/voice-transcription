@@ -1,0 +1,23 @@
+#!/bin/bash
+# Uninstall the transcribe widget Launch Agent
+
+PLIST_NAME="com.transcribe.widget.plist"
+PLIST_DST="$HOME/Library/LaunchAgents/$PLIST_NAME"
+
+# Check if installed
+if [ ! -f "$PLIST_DST" ]; then
+    echo "Widget is not installed."
+    exit 0
+fi
+
+# Unload the agent
+echo "Unloading launch agent..."
+launchctl unload "$PLIST_DST" 2>/dev/null
+
+# Remove plist
+echo "Removing launch agent..."
+rm "$PLIST_DST"
+
+echo ""
+echo "Widget uninstalled successfully!"
+echo "It will no longer start on login."

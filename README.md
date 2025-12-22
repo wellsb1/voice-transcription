@@ -237,6 +237,27 @@ config-backend-sherpa.yaml  # sherpa-onnx (ONNX Runtime)
 config-widget.yaml          # Menu bar widget settings
 ```
 
+### Creating Custom Configs
+
+The widget and `transcribe` script auto-discover any file matching `config-backend-*.yaml`. Create copies to experiment with different settings:
+
+```bash
+# Create an experimental config
+cp config-backend-m4.yaml config-backend-m4-experimental.yaml
+
+# Edit with different settings (e.g., different model, lower threshold)
+nano config-backend-m4-experimental.yaml
+
+# It automatically appears in the widget menu as "m4-experimental"
+# Or run directly:
+./transcribe --config=config-backend-m4-experimental.yaml
+```
+
+Example use cases:
+- `config-backend-m4-quiet.yaml` - Higher VAD threshold for noisy environments
+- `config-backend-m4-fast.yaml` - Smaller whisper model for lower latency
+- `config-backend-whisper-gpu.yaml` - CUDA-enabled for GPU acceleration
+
 ### Environment Variables (.env)
 
 Create a `.env` file in the project root for secrets and machine-specific settings:
@@ -402,10 +423,15 @@ macOS menu bar application for controlling transcription.
 - Start/stop transcription with one click
 - Shows real-time word count (configurable window)
 - Runs selected backend piped through logger
+- **Auto-start**: Optionally start transcription on launch
 
 ### Config (`config-widget.yaml`)
 
 ```yaml
+# Auto-start with this config on launch (null = don't auto-start)
+# Accepts full name "config-backend-m4.yaml" or short name "m4"
+auto_start: m4
+
 # Rolling window for word count stats (minutes)
 stats_window_minutes: 5
 ```
@@ -421,6 +447,19 @@ The widget appears in your menu bar with a waveform icon:
 - Select a config to start transcription
 - Click "Stop" to stop
 - Shows word count while running
+
+### Run on Login (macOS)
+
+Install the widget as a Launch Agent to start automatically on login:
+
+```bash
+./install-widget    # Install and start on login
+./uninstall-widget  # Remove from login items
+```
+
+Combined with `auto_start: m4` in config-widget.yaml, transcription begins automatically when you log in.
+
+Logs are written to `/tmp/transcribe-widget.log`.
 
 ---
 
@@ -487,6 +526,8 @@ voice-transcription/
 ├── transcribe-sherpa       # Sherpa backend launcher
 ├── transcribe-logger       # Rolling file logger
 ├── transcribe-widget       # macOS menu bar widget
+├── install-widget          # Install widget as Login Item
+├── uninstall-widget        # Remove widget from Login Items
 │
 ├── config-backend-m4.yaml      # M4 backend config
 ├── config-backend-whisper.yaml # Whisper backend config

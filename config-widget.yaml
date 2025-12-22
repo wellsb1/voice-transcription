@@ -1,5 +1,9 @@
 # Transcribe Widget Configuration
 # The widget dynamically discovers config-backend-*.yaml files
 
+# Auto-start with this config on launch (null = don't auto-start)
+# Example: "config-backend-m4.yaml" or just "m4"
+auto_start: m4
+
 # Rolling window for word count stats (minutes)
 stats_window_minutes: 5
