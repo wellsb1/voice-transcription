@@ -357,6 +357,10 @@ class TranscribeWidget(rumps.App):
 
 
 def main():
+    # Hide dock icon (run as menu bar accessory)
+    from AppKit import NSApplication, NSApplicationActivationPolicyAccessory
+    NSApplication.sharedApplication().setActivationPolicy_(NSApplicationActivationPolicyAccessory)
+
     TranscribeWidget().run()
 
 
