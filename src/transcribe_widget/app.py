@@ -274,7 +274,7 @@ class TranscribeWidget(rumps.App):
             NSLog("TranscribeWidget stderr: %@", line.strip())
 
     def _read_output(self):
-        """Read stdout from process and parse JSONL for stats."""
+        """Read stdout from process and parse JSON arrays for stats."""
         if not self.process or not self.process.stdout:
             return
 
@@ -288,16 +288,20 @@ class TranscribeWidget(rumps.App):
 
             try:
                 data = json.loads(line)
-                speaker = data.get("speaker", "")
-                text = data.get("text", "")
-                word_count = len(text.split())
+                # Handle both arrays and single objects (backwards compatible)
+                items = data if isinstance(data, list) else [data]
 
-                with self.lock:
-                    self.word_counts.append((datetime.now(), word_count))
+                for item in items:
+                    speaker = item.get("speaker", "")
+                    text = item.get("text", "")
+                    word_count = len(text.split())
 
-                # Log detection metadata (no content for privacy)
-                if text:
-                    NSLog("TranscribeWidget: [%@] %d words", speaker, word_count)
+                    with self.lock:
+                        self.word_counts.append((datetime.now(), word_count))
+
+                    # Log detection metadata (no content for privacy)
+                    if text:
+                        NSLog("TranscribeWidget: [%@] %d words", speaker, word_count)
 
             except json.JSONDecodeError:
                 # Not valid JSON, skip

@@ -1,26 +1,17 @@
-"""JSONL output formatting."""
+"""JSON array output formatting."""
 
 import json
-import sys
-from datetime import datetime, timedelta
-from typing import Optional
+from datetime import timedelta
 
 from .pipeline import DiarizedTranscript
 
 
 class JsonlOutput:
     """
-    Outputs diarized transcripts as JSONL to stdout.
+    Outputs diarized transcripts as JSON arrays to stdout.
 
-    Format:
-    {
-        "timestamp": "2024-01-01T12:00:00.000000",
-        "device": "m4-mini",
-        "speaker": "SPEAKER_00",
-        "start": 0.0,
-        "end": 2.5,
-        "text": "Hello world"
-    }
+    Each batch is output as a single JSON array on one line:
+    [{"timestamp": "...", "speaker": "SPEAKER_00", "text": "Hello"}, ...]
     """
 
     def __init__(self, device_name: str = "m4-mini"):
@@ -28,22 +19,16 @@ class JsonlOutput:
         Initialize output.
 
         Args:
-            device_name: Device identifier for JSONL output
+            device_name: Device identifier for output
         """
         self.device_name = device_name
 
-    def write(self, transcript: DiarizedTranscript) -> None:
-        """
-        Write a single transcript to stdout as JSONL.
-
-        Args:
-            transcript: DiarizedTranscript to output
-        """
-        # Calculate absolute timestamp for this segment
+    def _to_record(self, transcript: DiarizedTranscript) -> dict:
+        """Convert a transcript to a record dict."""
         segment_offset = timedelta(seconds=transcript.start)
         segment_timestamp = transcript.batch_timestamp + segment_offset
 
-        record = {
+        return {
             "timestamp": segment_timestamp.isoformat(),
             "device": self.device_name,
             "speaker": transcript.speaker,
@@ -53,14 +38,15 @@ class JsonlOutput:
             "text": transcript.text,
         }
 
-        print(json.dumps(record), flush=True)
-
     def write_batch(self, transcripts: list[DiarizedTranscript]) -> None:
         """
-        Write multiple transcripts to stdout.
+        Write batch of transcripts as a JSON array to stdout.
 
         Args:
             transcripts: List of DiarizedTranscript to output
         """
-        for transcript in transcripts:
-            self.write(transcript)
+        if not transcripts:
+            return
+
+        records = [self._to_record(t) for t in transcripts]
+        print(json.dumps(records), flush=True)

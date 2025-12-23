@@ -1,4 +1,4 @@
-"""JSONL output formatting and stdout streaming."""
+"""JSON array output formatting and stdout streaming."""
 
 import json
 import sys
@@ -8,9 +8,9 @@ from typing import TextIO
 
 class JsonlOutput:
     """
-    JSONL output formatter for transcription results.
+    JSON array output formatter for transcription results.
 
-    Writes one JSON object per line to stdout (or specified stream).
+    Writes one JSON array per chunk to stdout (or specified stream).
     """
 
     def __init__(
@@ -19,7 +19,7 @@ class JsonlOutput:
         stream: TextIO = None,
     ):
         """
-        Initialize JSONL output.
+        Initialize output.
 
         Args:
             device_name: Device identifier to include in output
@@ -27,43 +27,6 @@ class JsonlOutput:
         """
         self.device_name = device_name
         self.stream = stream or sys.stdout
-
-    def write(
-        self,
-        text: str,
-        speaker_id: int,
-        confidence: float,
-        rms: float = 0.0,
-        db: float = -60.0,
-        timestamp: datetime = None,
-    ) -> None:
-        """
-        Write a transcript line to output.
-
-        Args:
-            text: Transcribed text
-            speaker_id: Speaker identifier
-            confidence: Speaker match confidence (0.0-1.0)
-            rms: RMS audio energy (0.0-1.0)
-            db: Audio level in decibels (-60 to 0)
-            timestamp: Timestamp (default: now)
-        """
-        if timestamp is None:
-            timestamp = datetime.now()
-
-        record = {
-            "ts": timestamp.isoformat(timespec="milliseconds"),
-            "device": self.device_name,
-            "speaker": speaker_id,
-            "confidence": round(confidence, 3),
-            "rms": round(float(rms), 4),
-            "db": round(float(db), 1),
-            "text": text,
-        }
-
-        line = json.dumps(record, ensure_ascii=False)
-        self.stream.write(line + "\n")
-        self.stream.flush()
 
     def write_segments(
         self,
@@ -75,10 +38,9 @@ class JsonlOutput:
         base_timestamp: datetime = None,
     ) -> None:
         """
-        Write multiple transcript segments aggregated into one line.
+        Write transcript segments as a JSON array to stdout.
 
-        Combines all segments into a single utterance since they share
-        the same speaker within a chunk.
+        Combines all segments into a single record within an array.
 
         Args:
             segments: List of {"text": str, "start": float, "end": float}
@@ -102,11 +64,17 @@ class JsonlOutput:
             return
 
         combined_text = " ".join(texts)
-        self.write(
-            text=combined_text,
-            speaker_id=speaker_id,
-            confidence=confidence,
-            rms=rms,
-            db=db,
-            timestamp=base_timestamp,
-        )
+        record = {
+            "ts": base_timestamp.isoformat(timespec="milliseconds"),
+            "device": self.device_name,
+            "speaker": speaker_id,
+            "confidence": round(confidence, 3),
+            "rms": round(float(rms), 4),
+            "db": round(float(db), 1),
+            "text": combined_text,
+        }
+
+        # Output as single-element array for consistency with M4 backend
+        line = json.dumps([record], ensure_ascii=False)
+        self.stream.write(line + "\n")
+        self.stream.flush()

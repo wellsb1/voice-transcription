@@ -71,5 +71,12 @@ case "$BACKEND" in
         ;;
 esac
 
-# Run backend piped to logger
-exec "$SCRIPT_DIR/transcribe-$BACKEND" --config="$SCRIPT_DIR/$CONFIG" "$@" | "$SCRIPT_DIR/transcribe-logger"
+# Run backend piped to logger, and optionally to plugins
+if [ -d "$SCRIPT_DIR/plugins" ] && [ "$(ls -A "$SCRIPT_DIR/plugins" 2>/dev/null)" ]; then
+    exec "$SCRIPT_DIR/transcribe-$BACKEND" --config="$SCRIPT_DIR/$CONFIG" "$@" \
+        | "$SCRIPT_DIR/transcribe-logger" \
+        | "$SCRIPT_DIR/transcribe-plugins"
+else
+    exec "$SCRIPT_DIR/transcribe-$BACKEND" --config="$SCRIPT_DIR/$CONFIG" "$@" \
+        | "$SCRIPT_DIR/transcribe-logger"
+fi
