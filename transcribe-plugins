@@ -4,31 +4,15 @@
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PLUGINS_DIR="$SCRIPT_DIR/plugins"
-PLUGIN_TIMEOUT="${PLUGIN_TIMEOUT:-30}"
-
-# Use gtimeout on macOS, timeout on Linux
-if command -v gtimeout &>/dev/null; then
-    TIMEOUT_CMD="gtimeout"
-elif command -v timeout &>/dev/null; then
-    TIMEOUT_CMD="timeout"
-else
-    TIMEOUT_CMD=""
-fi
 
 while IFS= read -r line; do
     # Pass through immediately
     echo "$line"
 
-    # Spawn each executable plugin in background with timeout
+    # Spawn each executable plugin in background
     if [ -d "$PLUGINS_DIR" ]; then
         for plugin in "$PLUGINS_DIR"/*; do
-            if [ -x "$plugin" ] && [ -f "$plugin" ]; then
-                if [ -n "$TIMEOUT_CMD" ]; then
-                    echo "$line" | "$TIMEOUT_CMD" "$PLUGIN_TIMEOUT" "$plugin" 2>/dev/null &
-                else
-                    echo "$line" | "$plugin" 2>/dev/null &
-                fi
-            fi
+            [ -x "$plugin" ] && [ -f "$plugin" ] && echo "$line" | "$plugin" 2>/dev/null &
         done
     fi
 done
