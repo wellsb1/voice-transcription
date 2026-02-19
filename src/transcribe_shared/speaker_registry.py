@@ -56,6 +56,9 @@ class SpeakerRegistry:
         # Match existing speaker if similarity exceeds threshold
         if best_score >= self.threshold and best_id is not None:
             self.speakers[best_id]["last_seen"] = timestamp
+            # Update embedding with exponential moving average for stability
+            old = self.speakers[best_id]["embedding"]
+            self.speakers[best_id]["embedding"] = 0.7 * old + 0.3 * embedding
             return best_id
 
         # Create new speaker
@@ -90,3 +93,5 @@ class SpeakerRegistry:
         ]
         for sid in expired:
             del self.speakers[sid]
+        if not self.speakers:
+            self.next_id = 0

@@ -54,6 +54,7 @@ class Diarizer:
             self.device = torch.device(device)
 
         self._pipeline = None
+        self._embedding_inference = None
 
     def load(self) -> None:
         """Load the diarization pipeline."""
@@ -79,6 +80,18 @@ class Diarizer:
             token=self.huggingface_token,
         )
         self._pipeline.to(self.device)
+
+        # Load embedding model separately — pyannote's pipeline often returns
+        # empty speaker_embeddings (shape (0, N)), so we compute them ourselves
+        from pyannote.audio import Model, Inference
+
+        embedding_model = Model.from_pretrained(
+            self.model_name,
+            subfolder="embedding",
+            token=self.huggingface_token,
+        )
+        embedding_model.to(self.device)
+        self._embedding_inference = Inference(embedding_model, window="whole")
 
     def diarize(
         self,
@@ -112,16 +125,6 @@ class Diarizer:
         # DiarizeOutput is a dataclass with speaker_diarization (Annotation) field
         diarization = diarization_output.speaker_diarization
 
-        # Build speaker → embedding map
-        embeddings_by_speaker: dict[str, np.ndarray] = {}
-        if diarization_output.speaker_embeddings is not None:
-            labels = list(diarization.labels())
-            print(f"  Embeddings: {len(labels)} speakers, shape={diarization_output.speaker_embeddings.shape}", file=sys.stderr)
-            for i, label in enumerate(labels):
-                embeddings_by_speaker[label] = diarization_output.speaker_embeddings[i]
-        else:
-            print("  WARNING: No speaker embeddings returned from pyannote!", file=sys.stderr)
-
         # Convert to segments
         segments = []
         for turn, _, speaker in diarization.itertracks(yield_label=True):
@@ -133,7 +136,56 @@ class Diarizer:
                 )
             )
 
+        # Build speaker → embedding map
+        embeddings_by_speaker = self._extract_embeddings(
+            diarization_output, diarization, audio, segments, sample_rate,
+        )
+
         return segments, embeddings_by_speaker
+
+    def _extract_embeddings(
+        self,
+        diarization_output,
+        diarization,
+        audio: np.ndarray,
+        segments: list[SpeakerSegment],
+        sample_rate: int,
+    ) -> dict[str, np.ndarray]:
+        """Extract speaker embeddings, computing them ourselves if pyannote didn't."""
+        embeddings_by_speaker: dict[str, np.ndarray] = {}
+
+        # Check if pyannote returned usable embeddings
+        emb_tensor = diarization_output.speaker_embeddings
+        if emb_tensor is not None and emb_tensor.shape[0] > 0:
+            labels = list(diarization.labels())
+            print(f"  Embeddings from pipeline: {len(labels)} speakers", file=sys.stderr)
+            for i, label in enumerate(labels):
+                embeddings_by_speaker[label] = emb_tensor[i]
+            return embeddings_by_speaker
+
+        # Pipeline returned empty embeddings — compute them from speaker audio
+        # Collect all audio for each speaker label
+        speaker_audio: dict[str, list[np.ndarray]] = {}
+        for seg in segments:
+            chunk = audio[int(seg.start * sample_rate):int(seg.end * sample_rate)]
+            if len(chunk) > 0:
+                speaker_audio.setdefault(seg.speaker, []).append(chunk)
+
+        for label, chunks in speaker_audio.items():
+            combined = np.concatenate(chunks)
+            # Need at least 0.5s of audio for a meaningful embedding
+            if len(combined) < sample_rate // 2:
+                continue
+            waveform = torch.tensor(combined, dtype=torch.float32).unsqueeze(0)
+            audio_in = {"waveform": waveform, "sample_rate": sample_rate}
+            try:
+                emb = self._embedding_inference(audio_in)
+                embeddings_by_speaker[label] = emb
+            except Exception as e:
+                print(f"  WARNING: Failed to compute embedding for {label}: {e}", file=sys.stderr)
+
+        print(f"  Embeddings computed manually: {len(embeddings_by_speaker)} speakers", file=sys.stderr)
+        return embeddings_by_speaker
 
     def get_speaker_audio(
         self,
