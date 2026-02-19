@@ -41,6 +41,7 @@ ENV/
 data/
 # Transcript logs
 .transcripts/
+transcripts/
 # Downloaded ML models
 models/
 # Claude Code session data
@@ -48,6 +49,12 @@ models/
 
 # Logs
 *.log
+
+# Built binaries
+bin/
+
+# Swift build artifacts
+tools/audio-tap/.build/
 
 # OS
 .DS_Store
