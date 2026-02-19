@@ -8,3 +8,38 @@ auto_start: ${WIDGET_AUTO_START:-null}
 
 # Rolling window for word count stats (minutes)
 stats_window_minutes: 5
+
+# Jarvis - always-on wake word listener and voice command dispatcher
+jarvis:
+  enabled: true
+  audio_device: ${AUDIO_DEVICE:-null}
+  sample_rate: 16000
+
+  # Wake word detection (OpenWakeWord)
+  wakeword_models: [hey_jarvis_v0.1]
+  wakeword_threshold: 0.5
+
+  # Sounds
+  sound_trigger: /System/Library/Sounds/Tink.aiff
+  sound_done: /System/Library/Sounds/Pop.aiff
+  sound_cancel: /System/Library/Sounds/Funk.aiff
+
+  # Capture mode settings
+  capture_max_duration: 30.0
+  capture_silence_duration: 1.5
+  capture_silence_threshold: 0.005
+
+  # ASR model for captured voice commands (lazy-loaded on first use)
+  whisper_model: mlx-community/whisper-large-v3-turbo
+
+  # Built-in voice commands
+  builtin_commands:
+    start_transcribing: [start transcribing, begin transcribing, start recording]
+    stop_transcribing: [stop transcribing, stop recording]
+
+  # Default backend config when starting transcription via voice
+  default_transcription_config: m4
+
+  # Catch-all command for unmatched voice input (null = disabled)
+  # The spoken text is piped to stdin of this command
+  # catchall_command: ./yolanda.js -p

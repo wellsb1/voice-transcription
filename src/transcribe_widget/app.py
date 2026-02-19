@@ -14,21 +14,26 @@ import rumps
 
 from transcribe_shared.config import load_yaml
 
+from .jarvis import JarvisConfig, JarvisListener, JarvisMode
+
 # PyObjC for SF Symbols
 from AppKit import NSImage
 from Foundation import NSLog
 
 
-def sf_symbol(name: str, size: float = 18.0) -> NSImage:
-    """Get an SF Symbol as NSImage."""
+def sf_symbol(name: str, size: float = 18.0, color=None) -> NSImage:
+    """Get an SF Symbol as NSImage, optionally tinted."""
     from AppKit import NSFontWeightRegular, NSImageSymbolConfiguration
 
     img = NSImage.imageWithSystemSymbolName_accessibilityDescription_(name, None)
     if img:
         # Configure size
         config = NSImageSymbolConfiguration.configurationWithPointSize_weight_(size, NSFontWeightRegular)
+        if color:
+            color_config = NSImageSymbolConfiguration.configurationWithHierarchicalColor_(color)
+            config = config.configurationByApplyingConfiguration_(color_config)
         img = img.imageWithSymbolConfiguration_(config)
-        img.setTemplate_(True)  # Makes it adapt to light/dark menu bar
+        img.setTemplate_(color is None)  # Template only when no color
     return img
 
 
@@ -38,6 +43,7 @@ class TranscribeWidget(rumps.App):
     # SF Symbol names
     ICON_OFF = "waveform"
     ICON_ON = "waveform.circle.fill"
+    ICON_CAPTURE = "mic.fill"
 
     def __init__(self):
         # Start with text, will set icon after app starts
@@ -64,6 +70,32 @@ class TranscribeWidget(rumps.App):
         self.word_counts: deque = deque()
         self.lock = threading.Lock()
 
+        # Set up Jarvis config (before menu build, which references jarvis_enabled)
+        jarvis_cfg = self.widget_config.get("jarvis", {})
+        self.jarvis_enabled = jarvis_cfg.get("enabled", False)
+        self.jarvis: Optional[JarvisListener] = None
+
+        if self.jarvis_enabled:
+            self.jarvis_config = JarvisConfig(
+                audio_device=jarvis_cfg.get("audio_device"),
+                sample_rate=jarvis_cfg.get("sample_rate", 16000),
+                wakeword_models=jarvis_cfg.get("wakeword_models", []),
+                wakeword_threshold=jarvis_cfg.get("wakeword_threshold", 0.5),
+                sound_trigger=jarvis_cfg.get("sound_trigger", "/System/Library/Sounds/Tink.aiff"),
+                sound_done=jarvis_cfg.get("sound_done", "/System/Library/Sounds/Pop.aiff"),
+                sound_cancel=jarvis_cfg.get("sound_cancel", "/System/Library/Sounds/Funk.aiff"),
+                capture_max_duration=jarvis_cfg.get("capture_max_duration", 30.0),
+                capture_silence_duration=jarvis_cfg.get("capture_silence_duration", 1.5),
+                capture_silence_threshold=jarvis_cfg.get("capture_silence_threshold", 0.005),
+                whisper_model=jarvis_cfg.get("whisper_model", "mlx-community/whisper-large-v3-turbo"),
+                builtin_commands=jarvis_cfg.get("builtin_commands", {
+                    "start_transcribing": ["start transcribing", "begin transcribing", "start recording"],
+                    "stop_transcribing": ["stop transcribing", "stop recording"],
+                }),
+                default_transcription_config=jarvis_cfg.get("default_transcription_config", "m4"),
+                catchall_command=jarvis_cfg.get("catchall_command"),
+            )
+
         # Discover available configs
         self.configs = self._discover_configs()
 
@@ -75,9 +107,15 @@ class TranscribeWidget(rumps.App):
         self.timer.start()
 
         # Auto-start if configured (delayed to let UI initialize)
-        if self.auto_start:
-            self.auto_start_timer = rumps.Timer(self._do_auto_start, 1)
-            self.auto_start_timer.start()
+        self._start_timer = rumps.Timer(self._delayed_start, 2)
+        self._start_timer.start()
+
+    # Backend descriptions for menu display
+    BACKEND_DESCRIPTIONS = {
+        "m4": "Large model, Apple Silicon, speaker diarization",
+        "sherpa": "Small model, lightweight, CPU",
+        "whisper": "Medium model, general purpose",
+    }
 
     def _discover_configs(self) -> list[str]:
         """Discover available config-backend-*.yaml files."""
@@ -107,16 +145,56 @@ class TranscribeWidget(rumps.App):
 
         return None
 
-    def _do_auto_start(self, timer):
-        """Auto-start with configured config (runs once)."""
+    def _delayed_start(self, timer):
+        """Delayed startup for Jarvis and auto-start (runs once)."""
         timer.stop()
 
-        config = self._resolve_config(self.auto_start)
-        if config:
-            NSLog("TranscribeWidget: Auto-starting with %@", config)
-            self.start(config)
-        else:
-            NSLog("TranscribeWidget: Auto-start config not found: %@", self.auto_start)
+        # Start Jarvis if configured
+        if self.jarvis_enabled and self.jarvis_config.wakeword_models:
+            try:
+                self.jarvis = JarvisListener(
+                    config=self.jarvis_config,
+                    on_builtin_command=self._handle_jarvis_command,
+                    on_mode_change=self._handle_jarvis_mode_change,
+                )
+                self.jarvis.start()
+                NSLog("TranscribeWidget: Jarvis started")
+            except Exception as e:
+                NSLog("TranscribeWidget: Failed to start Jarvis: %@", str(e))
+
+        # Auto-start transcription if configured
+        if self.auto_start:
+            config = self._resolve_config(self.auto_start)
+            if config:
+                NSLog("TranscribeWidget: Auto-starting with %@", config)
+                self.start(config)
+            else:
+                NSLog("TranscribeWidget: Auto-start config not found: %@", self.auto_start)
+
+    def _handle_jarvis_command(self, command: str):
+        """Handle built-in voice commands from Jarvis (called from background thread)."""
+        from PyObjCTools import AppHelper
+
+        if command == "start_transcribing":
+            config_name = self.jarvis_config.default_transcription_config if self.jarvis_enabled else "m4"
+            config = self._resolve_config(config_name)
+            if config:
+                AppHelper.callAfter(lambda: self.start(config))
+        elif command == "stop_transcribing":
+            AppHelper.callAfter(lambda: self.stop(None))
+
+    def _handle_jarvis_mode_change(self, mode: JarvisMode):
+        """Handle Jarvis mode changes (called from background thread)."""
+        from PyObjCTools import AppHelper
+
+        if mode == JarvisMode.CAPTURE:
+            AppHelper.callAfter(self._set_icon_capture)
+        elif mode == JarvisMode.LISTENING:
+            # Restore appropriate icon based on transcription state
+            if self.running:
+                AppHelper.callAfter(self._set_icon_on)
+            else:
+                AppHelper.callAfter(self._set_icon_off)
 
     def _build_menu(self):
         """Build the menu with discovered configs."""
@@ -128,7 +206,9 @@ class TranscribeWidget(rumps.App):
         self.config_menu = rumps.MenuItem("Start")
         for config in self.configs:
             # Display name: strip "config-backend-" prefix and ".yaml" suffix
-            display_name = config.replace("config-backend-", "").replace(".yaml", "")
+            short_name = config.replace("config-backend-", "").replace(".yaml", "")
+            desc = self.BACKEND_DESCRIPTIONS.get(short_name, "")
+            display_name = f"{short_name} \u2014 {desc}" if desc else short_name
             item = rumps.MenuItem(display_name, callback=self._make_start_callback(config))
             self.config_menu[display_name] = item
 
@@ -139,10 +219,15 @@ class TranscribeWidget(rumps.App):
         self.current_config_item = rumps.MenuItem("Not running", callback=None)
         self.current_config_item.set_callback(None)
 
+        # Jarvis toggle
+        jarvis_label = "Jarvis: On" if self.jarvis_enabled else "Jarvis: Off"
+        self.jarvis_toggle = rumps.MenuItem(jarvis_label, callback=self._toggle_jarvis)
+
         self.menu = [
             self.config_menu,
             self.stop_item,
             None,  # Separator
+            self.jarvis_toggle,
             self.current_config_item,
             self.stats_item,
             None,  # Separator
@@ -165,7 +250,9 @@ class TranscribeWidget(rumps.App):
         # Update submenu
         self.config_menu.clear()
         for config in self.configs:
-            display_name = config.replace("config-backend-", "").replace(".yaml", "")
+            short_name = config.replace("config-backend-", "").replace(".yaml", "")
+            desc = self.BACKEND_DESCRIPTIONS.get(short_name, "")
+            display_name = f"{short_name} \u2014 {desc}" if desc else short_name
             item = rumps.MenuItem(display_name, callback=self._make_start_callback(config))
             self.config_menu[display_name] = item
         NSLog("TranscribeWidget: Refreshed configs, found %d", len(self.configs))
@@ -187,6 +274,16 @@ class TranscribeWidget(rumps.App):
     def _set_icon_on(self):
         """Set icon to active/recording state (waveform with circle)."""
         self._set_icon(self.ICON_ON)
+
+    def _set_icon_capture(self):
+        """Set icon to capture/trigger mode (blue tint)."""
+        try:
+            from AppKit import NSColor
+            button = self._nsapp.nsstatusitem.button()
+            button.setImage_(sf_symbol(self.ICON_CAPTURE, color=NSColor.whiteColor()))
+            self.title = ""
+        except AttributeError:
+            pass
 
     def _load_widget_config(self) -> dict:
         """Load widget config from TRANSCRIBE_WIDGET_CONFIG or ./config-widget.yaml"""
@@ -217,6 +314,7 @@ class TranscribeWidget(rumps.App):
                 text=True,
                 bufsize=1,
                 cwd=str(self.script_dir),
+                start_new_session=True,
             )
             self.running = True
             self._set_icon_on()
@@ -249,11 +347,20 @@ class TranscribeWidget(rumps.App):
         self.running = False
 
         if self.process:
-            self.process.terminate()
+            # Send SIGTERM to entire process group so the pipeline
+            # (backend | logger | plugins) all get the signal and can flush
+            import signal
             try:
-                self.process.wait(timeout=5)
+                os.killpg(self.process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                self.process.wait(timeout=10)
             except subprocess.TimeoutExpired:
-                self.process.kill()
+                try:
+                    os.killpg(self.process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
             self.process = None
 
         self._set_icon_off()
@@ -262,6 +369,26 @@ class TranscribeWidget(rumps.App):
         self.current_config_item.title = "Not running"
         self.current_config = None
         NSLog("TranscribeWidget: Stopped")
+
+    def _toggle_jarvis(self, sender):
+        """Toggle Jarvis on/off."""
+        if self.jarvis and self.jarvis.mode != JarvisMode.DISABLED:
+            self.jarvis.stop()
+            self.jarvis = None
+            sender.title = "Jarvis: Off"
+            NSLog("TranscribeWidget: Jarvis disabled")
+        elif self.jarvis_enabled and self.jarvis_config.wakeword_models:
+            try:
+                self.jarvis = JarvisListener(
+                    config=self.jarvis_config,
+                    on_builtin_command=self._handle_jarvis_command,
+                    on_mode_change=self._handle_jarvis_mode_change,
+                )
+                self.jarvis.start()
+                sender.title = "Jarvis: On"
+                NSLog("TranscribeWidget: Jarvis enabled")
+            except Exception as e:
+                NSLog("TranscribeWidget: Failed to start Jarvis: %@", str(e))
 
     def _read_stderr(self):
         """Read stderr from process for debugging."""
@@ -274,7 +401,7 @@ class TranscribeWidget(rumps.App):
             NSLog("TranscribeWidget stderr: %@", line.strip())
 
     def _read_output(self):
-        """Read stdout from process and parse JSON arrays for stats."""
+        """Read stdout from process and parse JSONL batch envelopes for stats."""
         if not self.process or not self.process.stdout:
             return
 
@@ -288,10 +415,15 @@ class TranscribeWidget(rumps.App):
 
             try:
                 data = json.loads(line)
-                # Handle both arrays and single objects (backwards compatible)
-                items = data if isinstance(data, list) else [data]
 
-                for item in items:
+                # Batch envelope format: {"id", "timestamp", "device", "utterances": [...]}
+                utterances = data.get("utterances", [])
+
+                # Backwards compatible: flat array of utterance objects
+                if isinstance(data, list):
+                    utterances = data
+
+                for item in utterances:
                     speaker = item.get("speaker", "")
                     text = item.get("text", "")
                     word_count = len(text.split())
@@ -299,12 +431,10 @@ class TranscribeWidget(rumps.App):
                     with self.lock:
                         self.word_counts.append((datetime.now(), word_count))
 
-                    # Log detection metadata (no content for privacy)
                     if text:
                         NSLog("TranscribeWidget: [%@] %d words", speaker, word_count)
 
             except json.JSONDecodeError:
-                # Not valid JSON, skip
                 pass
 
     def _check_process_alive(self):
@@ -316,7 +446,7 @@ class TranscribeWidget(rumps.App):
                 NSLog("TranscribeWidget: Process exited with code %d", exit_code)
                 self.running = False
                 self.process = None
-                self._set_icon_off()
+                self._set_icon_off()  # Back to listening/off state
                 self.config_menu.title = "Start"
                 self.stop_item.set_callback(None)
                 self.current_config_item.title = "Not running"
@@ -354,6 +484,8 @@ class TranscribeWidget(rumps.App):
 
     def quit_app(self, _):
         """Clean shutdown."""
+        if self.jarvis:
+            self.jarvis.stop()
         self.stop(None)
         rumps.quit_application()
 
