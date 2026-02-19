@@ -1,0 +1,5 @@
+#!/usr/bin/env node
+// Shutdown sync hook - final sync to catch any uploads that failed during session
+
+const { sync } = require('./lib/sync');
+sync('shutdown').catch(err => console.error('[launchcode-shutdown] Error:', err.message));

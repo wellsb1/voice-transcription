@@ -1,0 +1,5 @@
+#!/usr/bin/env node
+// Startup sync hook - uploads any missing transcripts before pipeline starts
+
+const { sync } = require('./lib/sync');
+sync('startup').catch(err => console.error('[launchcode-startup] Error:', err.message));

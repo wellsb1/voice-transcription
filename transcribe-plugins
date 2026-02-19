@@ -1,18 +1,44 @@
 #!/bin/bash
 # Plugin dispatcher - reads JSON lines, passes through to stdout, spawns plugins in background
 # Each plugin receives the JSON array on stdin
+#
+# Lifecycle hooks:
+#   plugins/*.startup  - run once at startup (before processing)
+#   plugins/*          - run for each JSON line (existing behavior)
+#   plugins/*.shutdown - run once at shutdown (on EXIT trap)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+export PATH="/opt/homebrew/bin:$PATH"
 PLUGINS_DIR="$SCRIPT_DIR/plugins"
+PLUGINS_LOG="$SCRIPT_DIR/data/plugins.log"
 
+run_hooks() {
+    local suffix="$1"
+    if [ -d "$PLUGINS_DIR" ]; then
+        for hook in "$PLUGINS_DIR"/*"$suffix"; do
+            [ -x "$hook" ] && [ -f "$hook" ] && "$hook" 2>>"$PLUGINS_LOG" &
+        done
+        wait
+    fi
+}
+
+# Run startup hooks
+run_hooks ".startup"
+
+# Run shutdown hooks on exit
+trap 'run_hooks ".shutdown"' EXIT
+
+# Process each line
 while IFS= read -r line; do
     # Pass through immediately
     echo "$line"
 
-    # Spawn each executable plugin in background
+    # Spawn each executable plugin in background (skip .startup/.shutdown hooks)
     if [ -d "$PLUGINS_DIR" ]; then
         for plugin in "$PLUGINS_DIR"/*; do
-            [ -x "$plugin" ] && [ -f "$plugin" ] && echo "$line" | "$plugin" 2>/dev/null &
+            [ -x "$plugin" ] && [ -f "$plugin" ] && \
+                [[ ! "$plugin" =~ \.(startup|shutdown)$ ]] && \
+                echo "$line" | "$plugin" 2>>"$PLUGINS_LOG" &
         done
     fi
 done

@@ -1,0 +1,50 @@
+#!/usr/bin/env node
+// Real-time upload plugin - sends each transcript batch to LaunchCode datatable
+// Receives JSON array on stdin, uploads to wells_voice_transcripts table
+// Key format: {device}.{yyyy}.{mm}.{dd}.{timestamp_no_periods}
+// Fails silently if offline - sync hooks will catch up later
+
+const { execSync } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+
+async function main() {
+  let input = '';
+  for await (const chunk of process.stdin) {
+    input += chunk;
+  }
+
+  if (!input.trim()) return;
+
+  const batch = JSON.parse(input);
+
+  // Support both envelope format and legacy array format
+  let device, timestamp, payload;
+  if (batch.utterances) {
+    // Envelope: {"id", "timestamp", "device", "utterances": [...]}
+    device = batch.device;
+    timestamp = batch.timestamp;
+    payload = batch;
+  } else if (Array.isArray(batch) && batch.length > 0) {
+    // Legacy: [{device, timestamp, speaker, text, ...}, ...]
+    device = batch[0].device;
+    timestamp = batch[0].timestamp;
+    payload = batch;
+  } else {
+    return;
+  }
+
+  // Build key: device.yyyy.mm.dd.timestamp_no_periods
+  // e.g., wells_laptop.2026.02.03.2026-02-03T02-37-57-498771
+  const date = timestamp.substring(0, 10).replace(/-/g, '.');
+  const tsClean = timestamp.replace(/[:.]/g, '-');
+  const key = `${device}.${date}.${tsClean}`;
+
+  // Upload via LaunchCode API
+  const apiScript = path.join(process.env.HOME, '.launchcode/scripts/api.js');
+  const code = `await api.tables.docs.put('wells_voice_transcripts', '${key}', ${JSON.stringify(payload)});`;
+
+  execSync(`${apiScript} -e "${code.replace(/"/g, '\\"')}"`, { stdio: 'ignore' });
+}
+
+main().catch(() => process.exit(0));

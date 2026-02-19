@@ -1,0 +1,30 @@
+#!/usr/bin/env node
+// Transcript sync plugin - relays stdin to stdout, triggers async sync worker
+// The worker uploads transcript batches to the voice-transcription-site API
+// sequentially from where it last left off.
+
+const { fork } = require('child_process');
+const path = require('path');
+
+async function main() {
+  let input = '';
+  for await (const chunk of process.stdin) {
+    input += chunk;
+  }
+
+  // Relay immediately
+  if (input.trim()) {
+    process.stdout.write(input);
+    if (!input.endsWith('\n')) process.stdout.write('\n');
+  }
+
+  // Spawn sync worker detached (don't wait for it)
+  const worker = fork(
+    path.join(__dirname, 'lib', 'transcript-sync-worker.js'),
+    [],
+    { detached: true, stdio: 'ignore' }
+  );
+  worker.unref();
+}
+
+main().catch(() => process.exit(0));
