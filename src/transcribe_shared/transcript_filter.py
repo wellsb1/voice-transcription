@@ -17,6 +17,33 @@ HALLUCINATION_PATTERNS = [
 ]
 
 
+def _is_nonsense_word(word: str) -> bool:
+    """Check if a single token looks like hallucinated noise rather than a real word.
+
+    Catches things like 'ucherucherucherucher', 'tiktiktik', 'erererererer' —
+    long strings with no spaces that have very low character diversity relative
+    to their length. Real words use a wider variety of characters.
+    """
+    if len(word) < 10:
+        return False
+    # Strip punctuation for analysis
+    alpha = re.sub(r'[^a-z]', '', word.lower())
+    if len(alpha) < 10:
+        return False
+    # Character diversity ratio: unique chars / length
+    # Real words: "internationalization" = 12 unique / 20 len = 0.60
+    # Noise: "ucherucherucherucher" = 5 unique / 20 len = 0.25
+    # Noise: "tiktiktiktiktik" = 3 unique / 15 len = 0.20
+    # Real: "Mississippi" = 4 unique / 11 len = 0.36 (borderline but short)
+    ratio = len(set(alpha)) / len(alpha)
+    # Longer words need more diversity to be real
+    if len(alpha) >= 15 and ratio < 0.3:
+        return True
+    if len(alpha) >= 10 and ratio < 0.2:
+        return True
+    return False
+
+
 def is_garbage_transcript(
     text: str,
     ignore_words: Optional[list[str]] = None,
@@ -42,8 +69,12 @@ def is_garbage_transcript(
         if re.match(pattern, text_lower, re.IGNORECASE):
             return True
 
-    # Parse words for further checks
     words = text_lower.split()
+
+    # Check for nonsense words (low character diversity, long tokens)
+    for w in words:
+        if _is_nonsense_word(w):
+            return True
 
     # Check if all words are in the ignore list
     if ignore_words:
@@ -54,10 +85,8 @@ def is_garbage_transcript(
 
     # Detect repetitive text (e.g., "ACL ACL ACL", "the the the")
     if len(words) >= 2:
-        # Check if all words are the same
         if len(set(words)) == 1:
             return True
-        # Check if it's highly repetitive (>70% same word)
         word_counts: dict[str, int] = {}
         for w in words:
             word_counts[w] = word_counts.get(w, 0) + 1
@@ -70,6 +99,37 @@ def is_garbage_transcript(
         return True
 
     return False
+
+
+def dedup_repetition(text: str) -> str:
+    """Remove looping phrase repetitions from Whisper hallucinations.
+
+    Detects patterns like "you know how you know how you know how..." and
+    collapses them to a single occurrence, preserving any non-repeating
+    prefix/suffix.
+    """
+    words = text.split()
+    if len(words) < 6:
+        return text
+
+    # Try phrase lengths from 2 to 8 words
+    for phrase_len in range(2, 9):
+        i = 0
+        while i <= len(words) - phrase_len:
+            phrase = words[i:i + phrase_len]
+            # Count consecutive repeats of this phrase
+            repeats = 1
+            j = i + phrase_len
+            while j + phrase_len <= len(words) and words[j:j + phrase_len] == phrase:
+                repeats += 1
+                j += phrase_len
+            if repeats >= 3:
+                # Collapse: keep prefix + one phrase + suffix
+                result = words[:i] + phrase + words[j:]
+                return dedup_repetition(" ".join(result))
+            i += 1
+
+    return text
 
 
 def filter_transcript(

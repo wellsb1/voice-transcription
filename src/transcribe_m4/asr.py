@@ -6,7 +6,7 @@ from typing import Optional
 
 import numpy as np
 
-from transcribe_shared.transcript_filter import is_garbage_transcript
+from transcribe_shared.transcript_filter import is_garbage_transcript, dedup_repetition
 
 
 @dataclass
@@ -85,7 +85,7 @@ class Transcriber:
 
         segments = []
         for seg in result.get("segments", []):
-            text = seg.get("text", "").strip()
+            text = dedup_repetition(seg.get("text", "").strip())
             if text and not is_garbage_transcript(text, self.ignore_words):
                 segments.append(
                     TranscriptSegment(
@@ -123,5 +123,5 @@ class Transcriber:
             language="en",
         )
 
-        text = result.get("text", "").strip()
+        text = dedup_repetition(result.get("text", "").strip())
         return "" if is_garbage_transcript(text, self.ignore_words) else text
