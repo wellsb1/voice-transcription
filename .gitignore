@@ -54,7 +54,7 @@ models/
 bin/
 
 # Swift build artifacts
-tools/audio-tap/.build/
+tools/*/.build/
 
 # OS
 .DS_Store
