@@ -1,6 +1,7 @@
 """Batch detection using Silero VAD for silence-based boundaries."""
 
 import sys
+import threading
 from typing import Optional
 
 import numpy as np
@@ -43,6 +44,7 @@ class BatchDetector:
         self._vad_model = None
         self._silence_samples = 0
         self._silence_samples_threshold = int(silence_duration * sample_rate)
+        self._lock = threading.Lock()
 
     def _load_vad(self) -> None:
         """Lazy-load Silero VAD model."""
@@ -55,6 +57,20 @@ class BatchDetector:
             model="silero_vad",
             trust_repo=True,
         )
+
+    def set_params(
+        self,
+        min_batch_duration: float,
+        max_batch_duration: float,
+        silence_duration: float,
+    ) -> None:
+        """Thread-safe parameter update for mode switching."""
+        with self._lock:
+            self.min_batch_duration = min_batch_duration
+            self.max_batch_duration = max_batch_duration
+            self.silence_duration = silence_duration
+            self._silence_samples_threshold = int(silence_duration * self.sample_rate)
+            self._silence_samples = 0
 
     def check_batch_ready(
         self,
@@ -73,43 +89,45 @@ class BatchDetector:
         """
         self._load_vad()
 
-        # Force batch at max duration
-        if total_duration >= self.max_batch_duration:
-            self._silence_samples = 0
-            return True
-
-        # Not enough audio yet
-        if total_duration < self.min_batch_duration:
-            return False
-
-        # Check for speech in this chunk using Silero VAD
-        # Silero expects 512-sample chunks at 16kHz
-        chunk_size = 512
-        is_speech = False
-
-        for i in range(0, len(audio_chunk) - chunk_size + 1, chunk_size):
-            chunk = audio_chunk[i : i + chunk_size]
-            audio_tensor = torch.tensor(chunk, dtype=torch.float32)
-            prob = self._vad_model(audio_tensor, self.sample_rate).item()
-            if prob > self.vad_threshold:
-                is_speech = True
-                break
-
-        if is_speech:
-            # Reset silence counter on speech
-            self._silence_samples = 0
-            return False
-        else:
-            # Accumulate silence
-            self._silence_samples += len(audio_chunk)
-
-            # Check if silence threshold reached
-            if self._silence_samples >= self._silence_samples_threshold:
+        with self._lock:
+            # Force batch at max duration
+            if total_duration >= self.max_batch_duration:
                 self._silence_samples = 0
                 return True
 
-        return False
+            # Not enough audio yet
+            if total_duration < self.min_batch_duration:
+                return False
+
+            # Check for speech in this chunk using Silero VAD
+            # Silero expects 512-sample chunks at 16kHz
+            chunk_size = 512
+            is_speech = False
+
+            for i in range(0, len(audio_chunk) - chunk_size + 1, chunk_size):
+                chunk = audio_chunk[i : i + chunk_size]
+                audio_tensor = torch.tensor(chunk, dtype=torch.float32)
+                prob = self._vad_model(audio_tensor, self.sample_rate).item()
+                if prob > self.vad_threshold:
+                    is_speech = True
+                    break
+
+            if is_speech:
+                # Reset silence counter on speech
+                self._silence_samples = 0
+                return False
+            else:
+                # Accumulate silence
+                self._silence_samples += len(audio_chunk)
+
+                # Check if silence threshold reached
+                if self._silence_samples >= self._silence_samples_threshold:
+                    self._silence_samples = 0
+                    return True
+
+            return False
 
     def reset(self) -> None:
         """Reset silence counter."""
-        self._silence_samples = 0
+        with self._lock:
+            self._silence_samples = 0
