@@ -33,12 +33,23 @@ class Config:
     speaker_inactivity_timeout: float = 1800.0  # Reset after 30 min silence
 
     # Audio settings
+    audio_source: str = "device"  # "device" (mic only) or "system-tap" (mic + system audio)
     audio_device: Optional[str] = None  # None = system default (input)
     audio_output_device: Optional[str] = None  # None = system default (output, for debug playback)
     sample_rate: int = 16000
 
+    # System tap settings (when audio_source = "system-tap")
+    system_tap_exclude: list[str] = field(default_factory=lambda: [
+        "com.apple.Music", "com.spotify.client",
+    ])
+    system_tap_mic: Optional[str] = None  # None = system default mic
+    system_tap_no_mic: bool = False
+    system_tap_binary: Optional[str] = None
+
     # Output settings
     device_name: str = "m4-mini"
+    save_audio: bool = False
+    audio_dir: str = "transcripts/audio"
 
 
 def load_config(config_path: Optional[Path] = None) -> Config:
@@ -57,6 +68,15 @@ def load_config(config_path: Optional[Path] = None) -> Config:
     )
 
     config = load_yaml(config_path)
+
+    # Flatten nested system_tap: dict into system_tap_* keys
+    if "system_tap" in config and isinstance(config["system_tap"], dict):
+        tap = config.pop("system_tap")
+        for k, v in tap.items():
+            flat_key = f"system_tap_{k}"
+            if flat_key not in config:  # don't override top-level keys
+                config[flat_key] = v
+
     config = apply_env_overrides(config, Config)
     config = filter_to_dataclass(config, Config)
 

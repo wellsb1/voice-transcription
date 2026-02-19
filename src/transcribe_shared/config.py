@@ -58,6 +58,11 @@ def _interpolate_env_vars(value: Any) -> Any:
         # Convert "null" or "none" strings to actual None
         if result.lower() in ('null', 'none', ''):
             return None
+        # Convert boolean strings to actual booleans
+        if result.lower() in ('true', 'yes'):
+            return True
+        if result.lower() in ('false', 'no'):
+            return False
         return result
     elif isinstance(value, dict):
         return {k: _interpolate_env_vars(v) for k, v in value.items()}

@@ -11,7 +11,7 @@ if [ ! -f "$PYTHON" ]; then
     echo "Setting up venv-m4..."
     python3 -m venv "$VENV_DIR"
     "$PIP" install --upgrade pip
-    "$PIP" install numpy torch torchaudio sounddevice pyyaml mlx-whisper pyannote.audio
+    "$PIP" install numpy torch torchaudio sounddevice pyyaml mlx-whisper pyannote.audio openwakeword
 fi
 
 # Source .env if present (set -a exports all variables)
@@ -19,6 +19,15 @@ if [ -f "$SCRIPT_DIR/.env" ]; then
     set -a
     source "$SCRIPT_DIR/.env"
     set +a
+fi
+
+# Auto-build audio-tap if using system-tap and binary is missing
+AUDIO_TAP_BINARY="$SCRIPT_DIR/bin/audio-tap"
+if [[ " $* " == *"--audio-source system-tap"* ]] || [[ "${AUDIO_SOURCE:-}" == "system-tap" ]]; then
+    if [ ! -f "$AUDIO_TAP_BINARY" ]; then
+        echo "Building and installing audio-tap Swift tool..."
+        make -C "$SCRIPT_DIR/tools/audio-tap" install
+    fi
 fi
 
 PYTHONPATH="$SCRIPT_DIR/src" exec "$PYTHON" -m transcribe_m4 "$@"

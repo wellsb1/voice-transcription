@@ -1,19 +1,63 @@
 """Main entry point for M4 transcription service."""
 
 import argparse
+import os
 import signal
+import subprocess
 import sys
 import threading
-import time
+import wave
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+import numpy as np
 
 from .batch import BatchDetector
 from .capture import AudioBuffer, AudioCapture
 from .config import Config, load_config
 from .output import JsonlOutput
 from .pipeline import Pipeline
+
+from transcribe_shared.tap_capture import AudioTapCapture
+
+
+def save_audio(
+    audio: np.ndarray,
+    timestamp: datetime,
+    config: Config,
+    segments: list,
+) -> None:
+    """Save only speech portions of batch audio as WAV."""
+    audio_dir = Path(config.audio_dir)
+    subdir = audio_dir / timestamp.strftime("%Y/%m/%d")
+    subdir.mkdir(parents=True, exist_ok=True)
+
+    filename = f"{timestamp.strftime('%Y%m%d%H%M%S')}-{config.device_name}.wav"
+    filepath = subdir / filename
+
+    # Extract only segments that contain transcribed speech
+    sr = config.sample_rate
+    gap = np.zeros(int(0.3 * sr), dtype=audio.dtype)  # 300ms silence between segments
+    chunks = []
+    for seg in segments:
+        start = int(seg.start * sr)
+        end = int(seg.end * sr)
+        if start < len(audio) and end > start:
+            if chunks:
+                chunks.append(gap)
+            chunks.append(audio[start:min(end, len(audio))])
+
+    if not chunks:
+        return
+
+    speech = np.concatenate(chunks)
+    samples = (speech * 32767).astype(np.int16)
+    with wave.open(str(filepath), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sr)
+        wf.writeframes(samples.tobytes())
 
 
 def parse_args() -> tuple[Config, bool, bool]:
@@ -48,6 +92,11 @@ def parse_args() -> tuple[Config, bool, bool]:
         "--audio-device",
         type=str,
         help="Audio input device name or index",
+    )
+    parser.add_argument(
+        "--audio-source",
+        choices=["device", "system-tap"],
+        help="Audio source: 'device' (mic only) or 'system-tap' (mic + system audio)",
     )
     parser.add_argument(
         "--debug",
@@ -88,6 +137,8 @@ def parse_args() -> tuple[Config, bool, bool]:
         config.device_name = args.device_name
     if args.audio_device:
         config.audio_device = args.audio_device
+    if args.audio_source:
+        config.audio_source = args.audio_source
 
     return config, False, args.debug
 
@@ -134,7 +185,7 @@ def main() -> int:
     # Create audio buffer
     audio_buffer = AudioBuffer(sample_rate=config.sample_rate)
 
-    # Batch ready event
+    # Events for thread coordination
     batch_ready = threading.Event()
     shutdown_requested = threading.Event()
 
@@ -147,12 +198,22 @@ def main() -> int:
         if batch_detector.check_batch_ready(audio_chunk, duration):
             batch_ready.set()
 
-    # Create and start audio capture
-    capture = AudioCapture(
-        sample_rate=config.sample_rate,
-        device=config.audio_device,
-        on_audio=on_audio,
-    )
+    # Create audio capture
+    if config.audio_source == "system-tap":
+        capture = AudioTapCapture(
+            sample_rate=config.sample_rate,
+            exclude_apps=config.system_tap_exclude,
+            mic_device=config.system_tap_mic,
+            no_mic=config.system_tap_no_mic,
+            binary_path=config.system_tap_binary,
+            on_audio=on_audio,
+        )
+    else:
+        capture = AudioCapture(
+            sample_rate=config.sample_rate,
+            device=config.audio_device,
+            on_audio=on_audio,
+        )
 
     # Signal handler
     def handle_signal(signum, frame):
@@ -165,11 +226,36 @@ def main() -> int:
 
     # Start capture
     capture.start()
-    print(
-        f"Started audio capture (device={config.audio_device or 'default'})",
-        file=sys.stderr,
-    )
+    if config.audio_source == "system-tap":
+        print(
+            f"Started system-tap capture (exclude={config.system_tap_exclude})",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            f"Started audio capture (device={config.audio_device or 'default'})",
+            file=sys.stderr,
+        )
     print("Listening...", file=sys.stderr)
+
+    # Start periodic transcript sync (runs on startup + every 30 min)
+    sync_script = Path(__file__).resolve().parent.parent.parent / "plugins" / "lib" / "transcript-sync-worker.js"
+    if sync_script.exists():
+        def sync_loop():
+            node = "/opt/homebrew/bin/node"
+            while not shutdown_requested.is_set():
+                try:
+                    subprocess.run(
+                        [node, str(sync_script)],
+                        timeout=120,
+                        capture_output=True,
+                    )
+                except Exception as e:
+                    print(f"Sync error: {e}", file=sys.stderr)
+                shutdown_requested.wait(1800)
+
+        sync_thread = threading.Thread(target=sync_loop, daemon=True)
+        sync_thread.start()
 
     # Main processing loop
     try:
@@ -201,22 +287,39 @@ def main() -> int:
                 sd.wait()
                 print("[DEBUG] Playback complete. Processing...", file=sys.stderr)
 
-            # Process batch
             try:
                 transcripts = pipeline.process(
                     audio,
                     batch_timestamp=timestamp,
                     sample_rate=config.sample_rate,
                 )
-
-                # Output results
                 output.write_batch(transcripts)
+                if config.save_audio and transcripts:
+                    save_audio(audio, timestamp, config, transcripts)
 
             except Exception as e:
                 print(f"Error processing batch: {e}", file=sys.stderr)
 
     finally:
         capture.stop()
+
+        # Flush remaining audio in buffer
+        audio, timestamp = audio_buffer.get_audio()
+        if len(audio) > 0:
+            duration = len(audio) / config.sample_rate
+            print(f"Flushing final {duration:.1f}s of audio...", file=sys.stderr)
+            try:
+                transcripts = pipeline.process(
+                    audio,
+                    batch_timestamp=timestamp,
+                    sample_rate=config.sample_rate,
+                )
+                output.write_batch(transcripts)
+                if config.save_audio and transcripts:
+                    save_audio(audio, timestamp, config, transcripts)
+            except Exception as e:
+                print(f"Error processing final batch: {e}", file=sys.stderr)
+
         print("Stopped.", file=sys.stderr)
 
     return 0

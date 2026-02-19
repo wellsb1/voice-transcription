@@ -26,13 +26,36 @@ vad_threshold: 0.6         # VAD sensitivity (0.0-1.0, higher = less sensitive t
 min_audio_energy: 0.0003   # Minimum RMS energy to process (just above noise floor)
 
 # Speaker tracking (cross-batch persistence)
-speaker_similarity_threshold: 0.75   # Cosine similarity for speaker matching
+speaker_similarity_threshold: 0.65   # Cosine similarity for speaker matching
 speaker_inactivity_timeout: 1800.0   # Reset speaker IDs after 30 min silence (seconds)
 
 # Audio settings
+audio_source: ${AUDIO_SOURCE:-device}  # "device" (mic only) or "system-tap" (mic + system audio)
 audio_device: ${AUDIO_DEVICE:-null}              # null = system default input, or device name/index
 audio_output_device: ${AUDIO_OUTPUT_DEVICE:-null}  # null = system default output (for --debug playback)
 sample_rate: 16000              # 16kHz required for Whisper
 
+# System tap settings (used when audio_source: system-tap)
+# Captures all system audio except excluded apps, mixed with microphone
+# Requires macOS 14.2+ and the audio-tap Swift tool (tools/audio-tap/)
+system_tap:
+  exclude: [com.apple.Music, com.spotify.client]
+  # mic: null       # null = system default mic, or device name
+  # no_mic: false   # true = system audio only, no mic
+  # binary: null    # null = auto-detect from tools/audio-tap/.build/release/audio-tap
+
 # Output
 device_name: ${DEVICE_NAME:-default}     # Device identifier in JSONL output
+save_audio: ${SAVE_AUDIO:-false}           # Save speech audio WAVs for diarization testing
+audio_dir: ${AUDIO_DIR:-transcripts/audio}  # Directory for saved audio (when save_audio: true)
+
+# Logging
+logs:
+  output_dir: ${TRANSCRIPTS_DIR:-transcripts/text}
+  max_lines: 100
+
+# Transcript sync - upload batches to voice-transcription-site API
+transcript_sync:
+  api_url: ${TRANSCRIPT_API_URL:-http://localhost:3000}
+  api_key: ${TRANSCRIPT_API_KEY}
+  port: ${TRANSCRIPT_SYNC_PORT:-9384}

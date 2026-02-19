@@ -32,5 +32,10 @@ ignore_words: []  # Example: ["acl", "ack", "hmm"]
 speaker_similarity_threshold: 0.75  # Cosine similarity for speaker matching
 speaker_inactivity_timeout: 1800.0  # Reset after 30 min silence (seconds)
 
+# Logging
+logs:
+  output_dir: ${TRANSCRIPTS_DIR:-transcripts}
+  max_lines: 100
+
 # Queue settings
 queue_dir: "./data/queue-sherpa"
