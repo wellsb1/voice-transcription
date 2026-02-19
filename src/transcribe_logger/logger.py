@@ -41,9 +41,12 @@ class TranscriptLogger:
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
     def _new_file(self) -> Path:
-        """Generate new filename with timestamp."""
-        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-        return self.output_dir / f"{timestamp}-{self.device_name}.jsonl"
+        """Generate new filename with timestamp in yyyy/mm/dd subdirectory."""
+        now = datetime.now()
+        subdir = self.output_dir / now.strftime("%Y") / now.strftime("%m") / now.strftime("%d")
+        subdir.mkdir(parents=True, exist_ok=True)
+        timestamp = now.strftime("%Y%m%d%H%M%S")
+        return subdir / f"{timestamp}-{self.device_name}.jsonl"
 
     def _open_new_file(self):
         """Close current file and open a new one."""
@@ -82,7 +85,7 @@ def main():
     # Get settings from config
     device_name = config.get("device_name", "m4-mini")
     logs_config = config.get("logs", {})
-    output_dir = Path(logs_config.get("output_dir", ".transcripts"))
+    output_dir = Path(logs_config.get("output_dir", "transcripts"))
     max_lines = logs_config.get("max_lines", 100)
 
     logger = TranscriptLogger(

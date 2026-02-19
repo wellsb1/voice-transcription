@@ -55,6 +55,9 @@ class SpeakerRegistry:
         # Match existing or create new
         if best_score >= self.threshold and best_id is not None:
             self.speakers[best_id]["last_seen"] = timestamp
+            # Update embedding with exponential moving average for stability
+            old = self.speakers[best_id]["embedding"]
+            self.speakers[best_id]["embedding"] = 0.7 * old + 0.3 * embedding
             print(f"    Speaker match: SPEAKER_{best_id:02d} (score={best_score:.3f})", file=sys.stderr)
             return best_id, best_score
 
@@ -228,3 +231,17 @@ class Pipeline:
             print(f"  Aggregated to {len(aggregated)} utterances", file=sys.stderr)
 
         return aggregated
+
+    def transcribe_only(
+        self,
+        audio: np.ndarray,
+        sample_rate: int = 16000,
+    ) -> str:
+        """
+        Transcribe audio without diarization. Returns plain text.
+
+        Used during trigger capture mode for fast ASR-only processing.
+        """
+        if len(audio) == 0:
+            return ""
+        return self.transcriber.transcribe_simple(audio, sample_rate)
