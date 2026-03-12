@@ -7,6 +7,18 @@ actor TranscriptSync {
     private let session = URLSession.shared
     private var syncTask: Task<Void, Never>?
 
+    func startPeriodicSync(intervalSeconds: TimeInterval = 1800) {
+        Task { await runSync() }
+        guard syncTask == nil else { return }
+        syncTask = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(intervalSeconds * 1_000_000_000))
+                guard !Task.isCancelled else { break }
+                await runSync()
+            }
+        }
+    }
+
     struct SyncCursor: Codable {
         var id: String?
         var timestamp: String?
@@ -20,24 +32,6 @@ actor TranscriptSync {
                 AppConfig.shared.dataDir.appendingPathComponent("sync-cursor.json")
             }
         }
-    }
-
-    func startPeriodicSync(intervalSeconds: TimeInterval = 1800) {
-        Task {
-            await runSync()
-        }
-        syncTask = Task {
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: UInt64(intervalSeconds * 1_000_000_000))
-                guard !Task.isCancelled else { break }
-                await runSync()
-            }
-        }
-    }
-
-    func stopPeriodicSync() {
-        syncTask?.cancel()
-        syncTask = nil
     }
 
     func runSync() async {
@@ -97,6 +91,10 @@ actor TranscriptSync {
                         uploaded += 1
                         cursor = SyncCursor(id: batch.id, timestamp: batch.timestamp, file: relPath, offset: lineNum)
                         saveCursor(cursor, to: cursorURL)
+                    } else if result.status == 401 {
+                        logger.warning("API key rejected (401), logging out")
+                        await AuthService.shared.logout()
+                        return
                     } else if result.status >= 400 && result.status < 500 {
                         skipped += 1
                         cursor = SyncCursor(id: batch.id, timestamp: batch.timestamp, file: relPath, offset: lineNum)

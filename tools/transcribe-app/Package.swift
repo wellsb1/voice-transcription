@@ -2,14 +2,14 @@
 import PackageDescription
 
 let package = Package(
-    name: "Transcribe",
+    name: "transcribed.me",
     platforms: [.macOS(.v14)],
     dependencies: [
         .package(url: "https://github.com/FluidInference/FluidAudio.git", from: "0.7.9"),
     ],
     targets: [
         .executableTarget(
-            name: "Transcribe",
+            name: "transcribed.me",
             dependencies: [
                 .product(name: "FluidAudio", package: "FluidAudio"),
             ],

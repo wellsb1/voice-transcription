@@ -1,12 +1,15 @@
 # Voice Transcription System
 
-A modular, always-on voice transcription system with speaker diarization. Captures audio from a USB microphone, transcribes speech locally using Whisper, identifies speakers, and outputs JSONL for downstream processing.
+A modular, always-on voice transcription system with speaker diarization. Captures audio from microphone and/or system audio (video calls, etc.), transcribes speech locally using Whisper, identifies speakers, and outputs JSONL for downstream processing.
 
 ## Features
 
 - **Multiple backend support**: M4 (Apple Silicon), faster-whisper (CPU), sherpa-onnx (cross-platform)
 - **Speaker diarization**: Identifies and tracks speakers across sessions
-- **Menu bar widget**: macOS menu bar app for easy control
+- **System audio capture**: Transcribe video calls, YouTube, etc. via Core Audio process taps (macOS 14.2+)
+- **Wake word activation**: "Hey Jarvis" voice commands for hands-free control
+- **Menu bar widget**: macOS menu bar app with Jarvis integration
+- **Plugin system**: Process transcripts with custom scripts (upload, sync, etc.)
 - **Transcript logging**: Rolling file storage with configurable retention
 - **Unix pipeline design**: Composable components, pipe-friendly output
 - **Privacy-focused**: Audio is never stored, only text
@@ -268,6 +271,9 @@ HUGGINGFACE_TOKEN=hf_your_token_here
 
 # Device identifier in JSONL output
 DEVICE_NAME=wells_office
+
+# Audio source: "device" (mic) or "system-tap" (mic + system audio)
+AUDIO_SOURCE=device
 ```
 
 ### Config Override Hierarchy
@@ -297,13 +303,19 @@ silence_duration: 0.5      # Silence threshold for batch boundary (seconds)
 vad_threshold: 0.6         # VAD sensitivity (0.0-1.0, higher = less sensitive)
 
 # Speaker tracking
-speaker_similarity_threshold: 0.75   # Cosine similarity for matching
+speaker_similarity_threshold: 0.65   # Cosine similarity for matching
 speaker_inactivity_timeout: 1800.0   # Reset speaker IDs after 30 min
 
 # Audio settings
-audio_device: null              # null = system default input
-audio_output_device: null       # null = system default output (for --debug)
-sample_rate: 16000              # 16kHz required for Whisper
+audio_source: device       # "device" (mic only) or "system-tap" (mic + system audio)
+audio_device: null          # null = system default input
+sample_rate: 16000          # 16kHz required for Whisper
+
+# System tap settings (used when audio_source: system-tap)
+system_tap:
+  exclude: [com.apple.Music, com.spotify.client]
+  # mic: null       # null = system default mic
+  # no_mic: false   # true = system audio only, no mic
 
 # Output
 device_name: ${DEVICE_NAME:-default}
@@ -340,22 +352,23 @@ queue_dir: "./data/queue-{backend}"
 
 ## JSONL Output Format
 
-One JSON object per line:
+One JSON envelope per batch:
 
 ```json
-{"timestamp": "2024-01-15T10:30:45.123456", "device": "wells_office", "speaker": "SPEAKER_00", "confidence": 0.92, "start": 0.0, "end": 2.5, "text": "Hello, how are you?"}
-{"timestamp": "2024-01-15T10:30:48.456789", "device": "wells_office", "speaker": "SPEAKER_01", "confidence": 0.87, "start": 2.8, "end": 5.1, "text": "I'm doing well, thanks."}
+{"id": "a1b2c3d4-...", "timestamp": "2024-01-15T10:30:45.123456", "device": "wells_office", "utterances": [{"speaker": "SPEAKER_00", "confidence": 0.92, "start": 0.0, "end": 2.5, "text": "Hello, how are you?"}, {"speaker": "SPEAKER_01", "confidence": 0.87, "start": 2.8, "end": 5.1, "text": "I'm doing well, thanks."}]}
 ```
 
 | Field | Description |
 |-------|-------------|
-| `timestamp` | ISO 8601 timestamp with microseconds |
+| `id` | UUID for the batch |
+| `timestamp` | ISO 8601 batch timestamp |
 | `device` | Device/location identifier from config |
-| `speaker` | Speaker label (e.g., "SPEAKER_00") |
-| `confidence` | Speaker match confidence (0.0-1.0) |
-| `start` | Segment start time within batch (seconds) |
-| `end` | Segment end time within batch (seconds) |
-| `text` | Transcribed text |
+| `utterances` | Array of speaker segments |
+| `utterances[].speaker` | Speaker label (e.g., "SPEAKER_00") |
+| `utterances[].confidence` | Speaker match confidence (0.0-1.0) |
+| `utterances[].start` | Segment start time within batch (seconds) |
+| `utterances[].end` | Segment end time within batch (seconds) |
+| `utterances[].text` | Transcribed text |
 
 ---
 
@@ -568,8 +581,11 @@ voice-transcription/
 │   │
 │   ├── transcribe_shared/      # Shared utilities
 │   │   ├── config.py           # YAML loading, env interpolation
+│   │   ├── capture.py          # AudioCapture (mic via sounddevice)
+│   │   ├── tap_capture.py      # AudioTapCapture (system audio + mic)
 │   │   ├── speaker_registry.py # Cross-batch speaker tracking
-│   │   └── transcript_filter.py # Garbage/hallucination filtering
+│   │   ├── wakeword.py         # OpenWakeWord detection
+│   │   └── trigger.py          # Trigger definitions and sound playback
 │   │
 │   ├── transcribe_logger/      # Transcript logger
 │   │   ├── __main__.py
@@ -577,14 +593,78 @@ voice-transcription/
 │   │
 │   └── transcribe_widget/      # Menu bar widget
 │       ├── __main__.py
-│       └── app.py              # rumps-based menu bar app
+│       ├── app.py              # rumps-based menu bar app
+│       └── jarvis.py           # Wake word voice command handler
 │
+├── tools/
+│   └── audio-tap/              # Swift CLI for system audio capture
+│       ├── Package.swift
+│       ├── Makefile
+│       ├── Info.plist
+│       └── Sources/AudioTap/   # Swift source files
+│
+├── bin/                        # Built binaries (gitignored)
+├── plugins/                    # Transcript processing plugins
 ├── .transcripts/               # Log files (gitignored)
 ├── data/                       # Runtime data (gitignored)
 │   └── queue-*/                # Disk queues for whisper/sherpa
 ├── models/                     # Downloaded models (gitignored)
 └── docs/                       # Legacy documentation
 ```
+
+---
+
+## System Audio Capture
+
+On macOS 14.2+, the system can capture audio from all running applications (video calls, YouTube, etc.) mixed with your microphone input using Core Audio process taps.
+
+### Setup
+
+```bash
+# Build the Swift audio-tap tool
+make -C tools/audio-tap install
+
+# Grant permission: System Settings > Privacy & Security > Screen & System Audio Recording
+# Add: bin/audio-tap
+```
+
+### Usage
+
+```bash
+# Set in .env
+AUDIO_SOURCE=system-tap
+
+# Or via CLI
+./transcribe-m4 --audio-source system-tap
+
+# Test standalone
+bin/audio-tap --exclude com.apple.Music,com.spotify.client
+```
+
+### Excluding Apps
+
+Apps in the `system_tap.exclude` list are filtered out. Common exclusions:
+
+```yaml
+system_tap:
+  exclude:
+    - com.apple.Music
+    - com.spotify.client
+```
+
+Use `--no-mic` for system audio only (no microphone):
+
+```bash
+bin/audio-tap --no-mic --exclude com.apple.Music
+```
+
+---
+
+## Plugins
+
+Transcript processing plugins live in the `plugins/` directory. The `transcribe-plugins` script runs all executable files in `plugins/` after each batch, passing the transcript log file as an argument.
+
+Plugins with `.startup` suffix run when transcription starts, `.shutdown` when it stops.
 
 ---
 
@@ -605,7 +685,7 @@ voice-transcription/
 The speaker similarity threshold may be too high. Lower it in your config:
 
 ```yaml
-speaker_similarity_threshold: 0.6  # Default is 0.75
+speaker_similarity_threshold: 0.5  # Default is 0.65
 ```
 
 ### "No speaker embeddings returned"

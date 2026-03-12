@@ -10,16 +10,22 @@ class TranscriptionPipeline: ObservableObject {
     @Published var totalWords = 0
     @Published var recentWords = 0
     @Published var isProcessing = false
+    @Published var latestBatch: BatchEnvelope?
+    @Published var startError: String?
 
-    private var captureManager: AnyObject? // AudioCaptureManager, but stored as AnyObject for availability
+    private var captureManager: AnyObject?
     private let batchDetector: BatchDetector
     private var transcriptLogger: TranscriptLogger?
     private var pluginRunner: PluginRunner?
     private let transcriptSync = TranscriptSync()
+    private let batchProcessor: BatchProcessor
+    private var lastBatchTime: Date?
+    private let speakerTimeoutSeconds: TimeInterval = 1800
 
     // Word count tracking
     private var wordCounts: [(Date, Int)] = []
     private let statsWindowMinutes = 5.0
+    private var statsTimer: Timer?
 
     init() {
         let config = AppConfig.shared
@@ -29,20 +35,39 @@ class TranscriptionPipeline: ObservableObject {
             maxBatchDuration: config.maxBatchDuration,
             silenceDuration: config.silenceDuration
         )
+        self.batchProcessor = BatchProcessor()
+    }
+
+    func startSync() async {
+        await transcriptSync.startPeriodicSync()
     }
 
     func start() async {
-        guard !isProcessing else { return }
+        guard !isProcessing else {
+            NSLog("[pipeline] start() skipped: already processing")
+            return
+        }
+        NSLog("[pipeline] start() called: asrReady=%d vadReady=%d vadManager=%@",
+              ModelManager.shared.asrReady ? 1 : 0,
+              ModelManager.shared.vadReady ? 1 : 0,
+              ModelManager.shared.vadManager == nil ? "nil" : "set")
         guard ModelManager.shared.asrReady, ModelManager.shared.vadReady else {
-            logger.error("Models not ready")
+            NSLog("[pipeline] start() aborted: models not ready")
             return
         }
 
         let config = AppConfig.shared
 
+        // Reset batch detector for new session
+        await batchDetector.resume()
+
         // Set up VAD in batch detector
         if let vad = ModelManager.shared.vadManager {
             await batchDetector.setVadManager(vad)
+        } else {
+            NSLog("[pipeline] WARNING: vadManager is nil! vadReady=%d asrReady=%d",
+                  ModelManager.shared.vadReady ? 1 : 0,
+                  ModelManager.shared.asrReady ? 1 : 0)
         }
 
         // Set up transcript logger
@@ -62,17 +87,25 @@ class TranscriptionPipeline: ObservableObject {
         pluginRunner = PluginRunner(pluginsDir: pluginsURL)
         await pluginRunner?.runStartupHooks()
 
-        // Start transcript sync
-        if config.syncApiUrl != nil {
-            await transcriptSync.startPeriodicSync()
-        }
+        // Capture references for the audio callback (no main actor needed)
+        let detector = batchDetector
+        let processor = batchProcessor
 
         // Start audio capture
         if #available(macOS 14.2, *) {
-            let capture = AudioCaptureManager(sampleRate: 16000) { [weak self] samples, timestamp in
-                guard let self = self else { return }
-                Task { @MainActor in
-                    await self.handleAudio(samples, timestamp: timestamp)
+            var audioChunkCount = 0
+            let capture = AudioCaptureManager(sampleRate: 16000) { samples, timestamp in
+                audioChunkCount += 1
+                if audioChunkCount % 100 == 1 {
+                    let sumSq = samples.reduce(Float(0)) { $0 + $1 * $1 }
+                    let rms = sqrt(sumSq / Float(max(samples.count, 1)))
+                    let peak = samples.map { abs($0) }.max() ?? 0
+                    NSLog("[pipeline] chunk #%d, %d samples, rms=%.6f peak=%.4f", audioChunkCount, samples.count, rms, peak)
+                }
+                Task {
+                    guard let batch = await detector.addAudio(samples, timestamp: timestamp) else { return }
+                    NSLog("[pipeline] batch ready, %d samples (%.1fs)", batch.audio.count, Double(batch.audio.count) / 16000.0)
+                    await processor.process(batch)
                 }
             }
 
@@ -88,8 +121,41 @@ class TranscriptionPipeline: ObservableObject {
                 }
                 self.captureManager = capture
                 isProcessing = true
+                startStatsTimer()
+                NSLog("[pipeline] capture started successfully, source=%@", config.audioSource.rawValue)
+
+                // Wire batch processor results back to main actor
+                let transcriptLogger = self.transcriptLogger
+                let pluginRunner = self.pluginRunner
+                let transcriptSync = self.transcriptSync
+                await processor.setOnBatchComplete { [weak self] result in
+                    // Write to file, plugins, sync — all off main actor
+                    await transcriptLogger?.write(result.envelope)
+
+                    if result.saveAudio, let clipData = result.audioClipData {
+                        try? clipData.data.write(to: clipData.filepath)
+                    }
+
+                    if let jsonLine = result.envelope.toJSONLine() {
+                        await pluginRunner?.dispatch(jsonLine: jsonLine)
+                    }
+
+                    await transcriptSync.runSync()
+
+                    // Only hop to main actor for UI updates
+                    await MainActor.run { [weak self] in
+                        guard let self else { return }
+                        self.latestBatch = result.envelope
+                        self.totalWords += result.wordCount
+                        self.wordCounts.append((Date(), result.wordCount))
+                        self.pruneOldCounts()
+                    }
+                }
+
                 logger.info("Pipeline started (source=\(config.audioSource.rawValue))")
             } catch {
+                NSLog("[pipeline] FAILED to start capture: %@", "\(error)")
+                self.startError = "\(error)"
                 logger.error("Failed to start capture: \(error.localizedDescription)")
             }
         } else {
@@ -99,6 +165,8 @@ class TranscriptionPipeline: ObservableObject {
 
     func stop() async {
         isProcessing = false
+        statsTimer?.invalidate()
+        statsTimer = nil
         if #available(macOS 14.2, *) {
             (captureManager as? AudioCaptureManager)?.stop()
         }
@@ -106,49 +174,106 @@ class TranscriptionPipeline: ObservableObject {
 
         // Flush remaining audio
         if let batch = await batchDetector.flush() {
-            await processBatch(batch)
+            await batchProcessor.process(batch)
         }
 
         await transcriptLogger?.close()
         await pluginRunner?.runShutdownHooks()
-        await transcriptSync.stopPeriodicSync()
 
         logger.info("Pipeline stopped")
     }
 
-    // MARK: - Audio handling
+    // MARK: - Stats
 
-    private func handleAudio(_ samples: [Float], timestamp: Date) async {
-        guard let batch = await batchDetector.addAudio(samples, timestamp: timestamp) else { return }
-        await processBatch(batch)
+    private func startStatsTimer() {
+        statsTimer?.invalidate()
+        statsTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.pruneOldCounts()
+            }
+        }
     }
 
-    private func processBatch(_ batch: BatchDetector.BatchResult) async {
-        let config = AppConfig.shared
-        let deviceName = config.deviceName
-        let diarizationEnabled = config.diarizationEnabled
+    private func pruneOldCounts() {
+        let cutoff = Date().addingTimeInterval(-statsWindowMinutes * 60)
+        wordCounts.removeAll { $0.0 < cutoff }
+        recentWords = wordCounts.reduce(0) { $0 + $1.1 }
+    }
+}
 
-        guard let asr = ModelManager.shared.asrManager else { return }
+// MARK: - BatchProcessor (nonisolated — runs off main actor)
+
+/// Handles the heavy work (ASR, diarization, audio clipping) entirely off the main actor.
+actor BatchProcessor {
+    private let logger = Logger(subsystem: "com.transcribeme.app", category: "processor")
+    private let speakerManager = SpeakerManager()
+    private var lastBatchTime: Date?
+    private let speakerTimeoutSeconds: TimeInterval = 1800
+
+    struct AudioClipData {
+        let filepath: URL
+        let data: Data
+    }
+
+    struct BatchResult {
+        let envelope: BatchEnvelope
+        let wordCount: Int
+        let saveAudio: Bool
+        let audioClipData: AudioClipData?
+    }
+
+    /// Called after each batch is processed (runs off main actor).
+    private var onBatchComplete: ((BatchResult) async -> Void)?
+
+    func setOnBatchComplete(_ handler: @escaping (BatchResult) async -> Void) {
+        self.onBatchComplete = handler
+    }
+
+    func process(_ batch: BatchDetector.BatchResult) async {
+        let config = await MainActor.run { AppConfig.shared }
+        let deviceName = await MainActor.run { config.deviceName }
+        let saveAudio = await MainActor.run { config.saveAudio }
+        let audioDir = await MainActor.run { config.audioDir }
+
+        // Reset speaker registry after inactivity gap
+        let now = Date()
+        if let last = lastBatchTime, now.timeIntervalSince(last) > speakerTimeoutSeconds {
+            speakerManager.reset()
+            logger.info("Speaker registry reset after \(Int(now.timeIntervalSince(last)))s inactivity")
+        }
+        lastBatchTime = now
+
+        guard let asr = await MainActor.run(body: { ModelManager.shared.asrManager }) else {
+            NSLog("[processor] no ASR manager available")
+            return
+        }
 
         let duration = Double(batch.audio.count) / 16000.0
-        logger.info("Processing batch: \(String(format: "%.1f", duration))s")
+        NSLog("[processor] starting ASR for %.1fs batch", duration)
 
         do {
             let result = try await asr.transcribe(batch.audio, source: .system)
             let text = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            NSLog("[processor] ASR done: %d chars, conf=%.2f", text.count, result.confidence)
 
             guard !text.isEmpty else { return }
 
             var utterances: [BatchUtterance]
 
-            if diarizationEnabled, let diarizer = ModelManager.shared.diarizationManager {
+            if let diarizer = await MainActor.run(body: { ModelManager.shared.diarizationManager }) {
                 do {
                     let diarResult = try await diarizer.process(audio: batch.audio)
-                    utterances = mergeAsrWithDiarization(text: text, diarization: diarResult, duration: duration)
+                    logger.info("Diarization: \(diarResult.segments.count) segments, \(diarResult.speakerDatabase?.count ?? 0) speakers in DB")
+                    utterances = mergeAsrWithDiarization(
+                        tokenTimings: result.tokenTimings,
+                        text: text,
+                        diarization: diarResult,
+                        duration: duration
+                    )
                 } catch {
                     logger.error("Diarization failed, falling back to single speaker: \(error.localizedDescription)")
                     utterances = [BatchUtterance(
-                        speaker: deviceName,
+                        speaker: "SPEAKER_00",
                         confidence: Double(result.confidence),
                         start: 0,
                         end: duration,
@@ -156,8 +281,9 @@ class TranscriptionPipeline: ObservableObject {
                     )]
                 }
             } else {
+                logger.info("Diarization skipped (models not loaded)")
                 utterances = [BatchUtterance(
-                    speaker: deviceName,
+                    speaker: "SPEAKER_00",
                     confidence: Double(result.confidence),
                     start: 0,
                     end: duration,
@@ -171,97 +297,35 @@ class TranscriptionPipeline: ObservableObject {
                 timestamp: batch.timestamp
             )
 
-            // Log to file
-            await transcriptLogger?.write(envelope)
-
-            // Save audio clip if enabled (trimmed to speech boundaries + 300ms tail)
-            if config.saveAudio {
-                saveAudioClip(batch, envelope: envelope, config: config)
+            // Prepare audio clip data if needed
+            var clipData: AudioClipData? = nil
+            if saveAudio {
+                clipData = buildAudioClip(batch, envelope: envelope, audioDir: audioDir)
             }
 
-            // Dispatch to plugins
-            if let jsonLine = envelope.toJSONLine() {
-                await pluginRunner?.dispatch(jsonLine: jsonLine)
-            }
-
-            // Update word counts
             let wordCount = text.split(separator: " ").count
-            totalWords += wordCount
-            wordCounts.append((Date(), wordCount))
-            pruneOldCounts()
-
             logger.info("Transcribed \(wordCount) words from \(utterances.count) utterance(s)")
+
+            let batchResult = BatchResult(
+                envelope: envelope,
+                wordCount: wordCount,
+                saveAudio: saveAudio,
+                audioClipData: clipData
+            )
+
+            await onBatchComplete?(batchResult)
         } catch {
             logger.error("ASR failed: \(error.localizedDescription)")
         }
     }
 
-    private func mergeAsrWithDiarization(text: String, diarization: DiarizationResult, duration: Double) -> [BatchUtterance] {
-        let segments = diarization.segments
-        guard !segments.isEmpty else {
-            return [BatchUtterance(speaker: "SPEAKER_00", confidence: 1.0, start: 0, end: duration, text: text)]
-        }
+    // MARK: - Audio clipping
 
-        // Group consecutive segments by speaker
-        var utterances: [BatchUtterance] = []
-        var currentSpeaker = ""
-        var currentStart = 0.0
-        var currentEnd = 0.0
-
-        for segment in segments {
-            let speaker = segment.speakerId
-            if speaker != currentSpeaker && !currentSpeaker.isEmpty {
-                utterances.append(BatchUtterance(
-                    speaker: currentSpeaker,
-                    confidence: 1.0,
-                    start: currentStart,
-                    end: currentEnd,
-                    text: ""
-                ))
-                currentStart = Double(segment.startTimeSeconds)
-            }
-            if currentSpeaker.isEmpty { currentStart = Double(segment.startTimeSeconds) }
-            currentSpeaker = speaker
-            currentEnd = Double(segment.endTimeSeconds)
-        }
-        if !currentSpeaker.isEmpty {
-            utterances.append(BatchUtterance(
-                speaker: currentSpeaker,
-                confidence: 1.0,
-                start: currentStart,
-                end: currentEnd,
-                text: ""
-            ))
-        }
-
-        // Distribute text: assign full text to first utterance (basic approach)
-        if utterances.count == 1 || !utterances.isEmpty {
-            var result = utterances
-            result[0] = BatchUtterance(
-                speaker: result[0].speaker,
-                confidence: result[0].confidence,
-                start: result[0].start,
-                end: result[0].end,
-                text: text
-            )
-            return result
-        }
-
-        return utterances
-    }
-
-    // MARK: - Stats
-
-    private func pruneOldCounts() {
-        let cutoff = Date().addingTimeInterval(-statsWindowMinutes * 60)
-        wordCounts.removeAll { $0.0 < cutoff }
-        recentWords = wordCounts.reduce(0) { $0 + $1.1 }
-    }
-
-    // MARK: - Audio saving
-
-    private func saveAudioClip(_ batch: BatchDetector.BatchResult, envelope: BatchEnvelope, config: AppConfig) {
-        let audioDir = config.audioDir
+    private func buildAudioClip(
+        _ batch: BatchDetector.BatchResult,
+        envelope: BatchEnvelope,
+        audioDir: URL
+    ) -> AudioClipData? {
         let cal = Calendar.current
         let now = Date()
         let subdir = audioDir
@@ -274,8 +338,7 @@ class TranscriptionPipeline: ObservableObject {
         let filename = "\(envelope.id).wav"
         let filepath = subdir.appendingPathComponent(filename)
 
-        // Trim to speech boundaries with 300ms tail
-        let tailSamples = Int(0.3 * 16000) // 300ms at 16kHz
+        let tailSamples = Int(0.3 * 16000)
         let startSample = max(0, (batch.speechStartSample ?? 0))
         let endSample: Int
         if let speechEnd = batch.speechEndSample {
@@ -284,16 +347,16 @@ class TranscriptionPipeline: ObservableObject {
             endSample = batch.audio.count
         }
 
-        guard startSample < endSample else { return }
+        guard startSample < endSample else { return nil }
         let clipped = Array(batch.audio[startSample..<endSample])
 
-        // Write 16kHz mono 16-bit PCM WAV
-        writeWav(samples: clipped, to: filepath)
+        let data = buildWav(samples: clipped)
         let clipDuration = Double(clipped.count) / 16000.0
-        logger.info("Saved audio clip: \(filename) (\(String(format: "%.1f", clipDuration))s)")
+        logger.info("Prepared audio clip: \(filename) (\(String(format: "%.1f", clipDuration))s)")
+        return AudioClipData(filepath: filepath, data: data)
     }
 
-    private func writeWav(samples: [Float], to filepath: URL) {
+    private func buildWav(samples: [Float]) -> Data {
         let sampleRate: UInt32 = 16000
         let numChannels: UInt16 = 1
         let bitsPerSample: UInt16 = 16
@@ -323,6 +386,200 @@ class TranscriptionPipeline: ObservableObject {
             data.append(contentsOf: withUnsafeBytes(of: int16.littleEndian) { Array($0) })
         }
 
-        try? data.write(to: filepath)
+        return data
+    }
+
+    // MARK: - Diarization merge
+
+    private struct SpeakerTurn {
+        let speaker: String
+        let start: Double
+        let end: Double
+    }
+
+    private func formatSpeakerId(_ id: String) -> String {
+        if let num = Int(id) {
+            return String(format: "SPEAKER_%02d", num - 1)
+        }
+        return id
+    }
+
+    private func mergeAsrWithDiarization(
+        tokenTimings: [TokenTiming]?,
+        text: String,
+        diarization: DiarizationResult,
+        duration: Double
+    ) -> [BatchUtterance] {
+        let segments = diarization.segments
+        guard !segments.isEmpty else {
+            return [BatchUtterance(speaker: "SPEAKER_00", confidence: 1.0, start: 0, end: duration, text: text)]
+        }
+
+        // Build local → persistent speaker ID mapping via SpeakerManager
+        var idMap: [String: String] = [:]
+        if let db = diarization.speakerDatabase {
+            for (localId, embedding) in db {
+                let speakerDuration = segments
+                    .filter { $0.speakerId == localId }
+                    .reduce(Float(0)) { $0 + ($1.endTimeSeconds - $1.startTimeSeconds) }
+
+                if let speaker = speakerManager.assignSpeaker(embedding, speechDuration: speakerDuration) {
+                    idMap[localId] = formatSpeakerId(speaker.id)
+                }
+            }
+        }
+
+        // Group consecutive diarization segments by persistent speaker ID into speaker turns
+        var turns: [SpeakerTurn] = []
+        var currentSpeaker = ""
+        var currentStart = 0.0
+        var currentEnd = 0.0
+
+        for segment in segments {
+            let speaker = idMap[segment.speakerId] ?? formatSpeakerId(segment.speakerId)
+            if speaker != currentSpeaker && !currentSpeaker.isEmpty {
+                turns.append(SpeakerTurn(speaker: currentSpeaker, start: currentStart, end: currentEnd))
+                currentStart = Double(segment.startTimeSeconds)
+            }
+            if currentSpeaker.isEmpty { currentStart = Double(segment.startTimeSeconds) }
+            currentSpeaker = speaker
+            currentEnd = Double(segment.endTimeSeconds)
+        }
+        if !currentSpeaker.isEmpty {
+            turns.append(SpeakerTurn(speaker: currentSpeaker, start: currentStart, end: currentEnd))
+        }
+
+        guard !turns.isEmpty else {
+            return [BatchUtterance(speaker: "SPEAKER_00", confidence: 1.0, start: 0, end: duration, text: text)]
+        }
+
+        if let timings = tokenTimings, !timings.isEmpty {
+            return assignWordsToTurns(timings: timings, turns: turns, duration: duration)
+        }
+
+        let longestTurn = turns.max(by: { ($0.end - $0.start) < ($1.end - $1.start) })!
+        return [BatchUtterance(
+            speaker: longestTurn.speaker,
+            confidence: 1.0,
+            start: longestTurn.start,
+            end: longestTurn.end,
+            text: text
+        )]
+    }
+
+    private struct WordTiming {
+        let word: String
+        let startTime: Double
+        let endTime: Double
+    }
+
+    private func buildWordTimings(from tokenTimings: [TokenTiming]) -> [WordTiming] {
+        var words: [WordTiming] = []
+        var currentWord = ""
+        var wordStart = 0.0
+        var wordEnd = 0.0
+
+        for timing in tokenTimings {
+            let token = timing.token
+            if token.isEmpty || token == "<blank>" || token == "<pad>" { continue }
+
+            let startsNewWord = token.hasPrefix("▁") || token.hasPrefix(" ") || currentWord.isEmpty
+
+            if startsNewWord && !currentWord.isEmpty {
+                let trimmed = currentWord.trimmingCharacters(in: .whitespaces)
+                if !trimmed.isEmpty {
+                    words.append(WordTiming(word: trimmed, startTime: wordStart, endTime: wordEnd))
+                }
+                currentWord = ""
+            }
+
+            if startsNewWord {
+                var stripped = token
+                if stripped.hasPrefix("▁") || stripped.hasPrefix(" ") {
+                    stripped = String(stripped.dropFirst())
+                }
+                currentWord = stripped
+                wordStart = timing.startTime
+            } else {
+                currentWord += token
+            }
+            wordEnd = timing.endTime
+        }
+
+        let trimmed = currentWord.trimmingCharacters(in: .whitespaces)
+        if !trimmed.isEmpty {
+            words.append(WordTiming(word: trimmed, startTime: wordStart, endTime: wordEnd))
+        }
+        return words
+    }
+
+    private func assignWordsToTurns(
+        timings: [TokenTiming],
+        turns: [SpeakerTurn],
+        duration: Double
+    ) -> [BatchUtterance] {
+        let words = buildWordTimings(from: timings)
+        guard !words.isEmpty else {
+            return [BatchUtterance(speaker: turns[0].speaker, confidence: 1.0, start: 0, end: duration, text: "")]
+        }
+
+        func speakerForWord(_ word: WordTiming) -> String {
+            let wordMid = (word.startTime + word.endTime) / 2.0
+            for turn in turns {
+                if wordMid >= turn.start && wordMid <= turn.end {
+                    return turn.speaker
+                }
+            }
+            var bestTurn = turns[0]
+            var bestDist = Double.greatestFiniteMagnitude
+            for turn in turns {
+                let dist = min(abs(wordMid - turn.start), abs(wordMid - turn.end))
+                if dist < bestDist {
+                    bestDist = dist
+                    bestTurn = turn
+                }
+            }
+            return bestTurn.speaker
+        }
+
+        var utterances: [BatchUtterance] = []
+        var currentWords: [String] = []
+        var currentSpeaker = ""
+        var utteranceStart = 0.0
+        var utteranceEnd = 0.0
+
+        for word in words {
+            let speaker = speakerForWord(word)
+
+            if speaker != currentSpeaker && !currentWords.isEmpty {
+                utterances.append(BatchUtterance(
+                    speaker: currentSpeaker,
+                    confidence: 1.0,
+                    start: utteranceStart,
+                    end: utteranceEnd,
+                    text: currentWords.joined(separator: " ")
+                ))
+                currentWords = []
+            }
+
+            if currentWords.isEmpty {
+                utteranceStart = word.startTime
+            }
+            currentSpeaker = speaker
+            utteranceEnd = word.endTime
+            currentWords.append(word.word)
+        }
+
+        if !currentWords.isEmpty {
+            utterances.append(BatchUtterance(
+                speaker: currentSpeaker,
+                confidence: 1.0,
+                start: utteranceStart,
+                end: utteranceEnd,
+                text: currentWords.joined(separator: " ")
+            ))
+        }
+
+        return utterances
     }
 }

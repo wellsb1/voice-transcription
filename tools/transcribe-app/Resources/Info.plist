@@ -4,21 +4,25 @@
 <dict>
     <key>CFBundleIdentifier</key>
     <string>com.transcribeme.app</string>
+    <key>CFBundleExecutable</key>
+    <string>transcribed.me</string>
     <key>CFBundleName</key>
-    <string>Transcribe</string>
+    <string>transcribed.me</string>
     <key>CFBundleDisplayName</key>
-    <string>Transcribe</string>
+    <string>transcribed.me</string>
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>CFBundleShortVersionString</key>
     <string>1.0.0</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>LSUIElement</key>
     <true/>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Transcribe captures microphone audio for speech-to-text transcription.</string>
+    <string>transcribed.me captures microphone audio for speech-to-text transcription.</string>
     <key>NSSystemAudioRecordingUsageDescription</key>
-    <string>Transcribe captures system audio for speech-to-text transcription.</string>
+    <string>transcribed.me captures system audio for speech-to-text transcription.</string>
 </dict>
 </plist>

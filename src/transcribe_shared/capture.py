@@ -1,7 +1,7 @@
 """Audio capture from microphone."""
 
 from typing import Optional, Callable
-from datetime import datetime
+from datetime import datetime, timezone
 
 import numpy as np
 import sounddevice as sd
@@ -35,7 +35,7 @@ class AudioCapture:
         if self.on_audio is not None:
             # Copy data and send to callback
             audio = indata[:, 0].copy().astype(np.float32)
-            timestamp = datetime.now()
+            timestamp = datetime.now(tz=timezone.utc)
             self.on_audio(audio, timestamp)
 
     def start(self) -> None:

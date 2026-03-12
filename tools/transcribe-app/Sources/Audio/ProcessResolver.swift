@@ -50,6 +50,40 @@ class ProcessResolver {
         return nil
     }
 
+    struct AudioDevice {
+        let name: String
+        let uid: String
+    }
+
+    /// Returns all input-capable audio devices (microphones).
+    func getInputDevices() -> [AudioDevice] {
+        var result: [AudioDevice] = []
+        for deviceID in getDeviceList() {
+            // Check if device has input channels
+            var address = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyStreamConfiguration,
+                mScope: kAudioObjectPropertyScopeInput,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            var size: UInt32 = 0
+            guard AudioObjectGetPropertyDataSize(deviceID, &address, 0, nil, &size) == noErr,
+                  size > 0 else { continue }
+
+            let bufferListPtr = UnsafeMutablePointer<AudioBufferList>.allocate(capacity: 1)
+            defer { bufferListPtr.deallocate() }
+            guard AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, bufferListPtr) == noErr else { continue }
+
+            let channelCount = UnsafeMutableAudioBufferListPointer(bufferListPtr).reduce(0) { $0 + Int($1.mNumberChannels) }
+            guard channelCount > 0 else { continue }
+
+            if let name = getDeviceName(for: deviceID) {
+                let uid = getDeviceUID(for: deviceID) ?? name
+                result.append(AudioDevice(name: name, uid: uid))
+            }
+        }
+        return result
+    }
+
     // MARK: - Private
 
     private func getProcessList() -> [AudioObjectID] {

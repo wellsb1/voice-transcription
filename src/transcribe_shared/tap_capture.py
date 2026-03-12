@@ -4,7 +4,7 @@ import os
 import subprocess
 import sys
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -104,7 +104,7 @@ class AudioTapCapture:
 
             audio = np.frombuffer(data, dtype=np.float32)
             if len(audio) > 0 and self.on_audio is not None:
-                self.on_audio(audio, datetime.now())
+                self.on_audio(audio, datetime.now(tz=timezone.utc))
 
     def _read_stderr(self) -> None:
         """Forward subprocess stderr to our stderr."""

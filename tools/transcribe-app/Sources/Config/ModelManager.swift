@@ -15,6 +15,8 @@ class ModelManager: ObservableObject {
     @Published var downloadProgress: Double = 0
     @Published var downloadStatus: String = ""
     @Published var isDownloading = false
+    @Published var isLoading = false
+    @Published var loadingStatus: String = ""
     @Published var downloadError: String?
 
     private(set) var asrManager: AsrManager?
@@ -24,6 +26,37 @@ class ModelManager: ObservableObject {
     private init() {}
 
     var modelsDir: URL { AppConfig.shared.modelsDir }
+
+    /// Fast filesystem check: are ASR models cached on disk?
+    func coreModelsExistOnDisk() -> Bool {
+        return AsrModels.modelsExist(
+            at: AsrModels.defaultCacheDirectory(for: .v3),
+            version: .v3
+        )
+    }
+
+    /// Delete cached model files and re-download everything.
+    func forceRedownloadAll() async {
+        cleanup()
+
+        // Delete ASR + VAD caches (shared FluidAudio location)
+        let asrDir = AsrModels.defaultCacheDirectory(for: .v3)
+        try? FileManager.default.removeItem(at: asrDir)
+
+        let vadDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("FluidAudio/Models/silero-vad-coreml")
+        try? FileManager.default.removeItem(at: vadDir)
+
+        // Delete diarization cache (app-specific location)
+        let diarDir = modelsDir.appendingPathComponent("speaker-diarization-coreml")
+        try? FileManager.default.removeItem(at: diarDir)
+
+        AppConfig.shared.modelsReady = false
+        AppConfig.shared.diarizationModelsReady = false
+
+        await downloadCoreModels()
+        await downloadDiarizationModels()
+    }
 
     /// Download and initialize ASR + VAD models.
     func downloadCoreModels() async {
@@ -81,9 +114,10 @@ class ModelManager: ObservableObject {
         }
     }
 
-    /// Load already-downloaded models (for app restart).
+    /// Load already-cached models. No guard on UserDefaults — checks disk directly.
     func loadModelsIfReady() async {
-        guard AppConfig.shared.modelsReady else { return }
+        isLoading = true
+        loadingStatus = "Loading speech recognition..."
 
         do {
             let asrModels = try await AsrModels.downloadAndLoad(version: .v3)
@@ -92,28 +126,33 @@ class ModelManager: ObservableObject {
             self.asrManager = asr
             self.asrReady = true
 
+            loadingStatus = "Loading voice detection..."
             let vad = try await VadManager()
             self.vadManager = vad
             self.vadReady = true
 
+            AppConfig.shared.modelsReady = true
             logger.info("Core models loaded")
         } catch {
             logger.error("Failed to load models: \(error.localizedDescription)")
             AppConfig.shared.modelsReady = false
         }
 
-        if AppConfig.shared.diarizationModelsReady {
-            do {
-                let diarizer = OfflineDiarizerManager()
-                try await diarizer.prepareModels(directory: modelsDir)
-                self.diarizationManager = diarizer
-                self.diarizationReady = true
-                logger.info("Diarization models loaded")
-            } catch {
-                logger.error("Failed to load diarization models: \(error.localizedDescription)")
-                AppConfig.shared.diarizationModelsReady = false
-            }
+        loadingStatus = "Loading speaker identification..."
+        do {
+            let diarizer = OfflineDiarizerManager()
+            try await diarizer.prepareModels(directory: modelsDir)
+            self.diarizationManager = diarizer
+            self.diarizationReady = true
+            AppConfig.shared.diarizationModelsReady = true
+            logger.info("Diarization models loaded")
+        } catch {
+            logger.error("Failed to load diarization models: \(error.localizedDescription)")
+            AppConfig.shared.diarizationModelsReady = false
         }
+
+        loadingStatus = ""
+        isLoading = false
     }
 
     func cleanup() {
@@ -125,4 +164,21 @@ class ModelManager: ObservableObject {
         vadReady = false
         diarizationReady = false
     }
+}
+
+/// Calculate total size of a directory on disk (nonisolated, safe for background threads).
+func modelDirectorySize(_ url: URL) -> UInt64 {
+    guard let enumerator = FileManager.default.enumerator(
+        at: url,
+        includingPropertiesForKeys: [.fileSizeKey],
+        options: [.skipsHiddenFiles]
+    ) else { return 0 }
+
+    var total: UInt64 = 0
+    for case let fileURL as URL in enumerator {
+        if let size = try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize {
+            total += UInt64(size)
+        }
+    }
+    return total
 }

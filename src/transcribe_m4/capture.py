@@ -1,7 +1,7 @@
 """Audio capture with memory buffer."""
 
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 
 import numpy as np
 
@@ -42,7 +42,7 @@ class AudioBuffer:
         """
         with self._lock:
             if not self._buffer:
-                return np.array([], dtype=np.float32), datetime.now()
+                return np.array([], dtype=np.float32), datetime.now(tz=timezone.utc)
 
             audio = np.concatenate(self._buffer)
             first_timestamp = self._timestamps[0]

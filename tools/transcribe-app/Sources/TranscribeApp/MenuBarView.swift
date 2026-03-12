@@ -92,6 +92,7 @@ struct MenuBarView: View {
     @State private var isLoggingIn = false
     @State private var loginTask: Task<Void, Never>?
     @State private var loginError: String?
+    @State private var markerIcon: String?
 
     private var isLoggedIn: Bool {
         appState.config.syncApiKey != nil
@@ -106,11 +107,43 @@ struct MenuBarView: View {
                 Spacer()
                 Text(appState.isRunning ? "Active" : "Idle")
                     .font(.caption)
-                    .foregroundStyle(appState.isRunning ? .green : .secondary)
+                    .foregroundStyle(.secondary)
             }
 
-            // Login prompt
-            if !isLoggedIn && !isLoggingIn {
+            // Account status
+            if isLoggedIn {
+                HStack(spacing: 6) {
+                    Image(systemName: "person.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(appState.config.userEmail ?? "Signed in")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Spacer()
+                    Image(systemName: "checkmark.icloud")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else if isLoggingIn {
+                HStack {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Waiting for authorization...")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Cancel") {
+                        loginTask?.cancel()
+                        loginTask = nil
+                        isLoggingIn = false
+                    }
+                    .font(.caption)
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 8)
+            } else {
                 Divider()
 
                 Button {
@@ -120,6 +153,7 @@ struct MenuBarView: View {
                         do {
                             try await AuthService.shared.login()
                             isLoggingIn = false
+                            await appState.pipeline.startSync()
                         } catch is CancellationError {
                             isLoggingIn = false
                         } catch {
@@ -149,28 +183,6 @@ struct MenuBarView: View {
                 }
             }
 
-            if isLoggingIn {
-                Divider()
-
-                HStack {
-                    ProgressView()
-                        .controlSize(.small)
-                    Text("Waiting for authorization...")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button("Cancel") {
-                        loginTask?.cancel()
-                        loginTask = nil
-                        isLoggingIn = false
-                    }
-                    .font(.caption)
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
-                }
-                .padding(.horizontal, 8)
-            }
-
             Divider()
 
             // Stats
@@ -188,6 +200,19 @@ struct MenuBarView: View {
                 }
             }
 
+            // Start error
+            if let error = appState.pipeline.startError {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.yellow)
+                        .font(.caption)
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
             // Audio source indicator
             HStack {
                 Image(systemName: appState.config.audioSource == .systemTap ? "speaker.wave.2" : "mic")
@@ -196,12 +221,6 @@ struct MenuBarView: View {
                 Text(appState.config.audioSource == .systemTap ? "System + Mic" : "Microphone only")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                if isLoggedIn {
-                    Spacer()
-                    Image(systemName: "checkmark.icloud")
-                        .font(.caption)
-                        .foregroundStyle(.green)
-                }
             }
 
             Divider()
@@ -211,7 +230,47 @@ struct MenuBarView: View {
                 Task { await appState.toggleTranscription() }
             }
 
+            if isLoggedIn {
+                Divider()
+
+                HStack {
+                    MenuRow("Mark Conversation") {
+                        Task {
+                            do {
+                                try await MarkerService.shared.createMarker()
+                                flashMarkerIcon("hand.thumbsup.fill")
+                            } catch {
+                                flashMarkerIcon("xmark.circle.fill")
+                            }
+                        }
+                    }
+                    if let icon = markerIcon {
+                        Image(systemName: icon)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .transition(.opacity)
+                    }
+                }
+
+                MenuRow("Mark with Note...") {
+                    MarkerNoteWindowController.shared.open { note in
+                        Task {
+                            do {
+                                try await MarkerService.shared.createMarker(note: note)
+                                flashMarkerIcon("hand.thumbsup.fill")
+                            } catch {
+                                flashMarkerIcon("xmark.circle.fill")
+                            }
+                        }
+                    }
+                }
+            }
+
             Divider()
+
+            MenuRow("View Transcript History") {
+                TranscriptWindowController.shared.open(store: appState.transcriptStore)
+            }
 
             MenuRow("View Transcripts Online") {
                 if let url = URL(string: AppConfig.shared.syncApiUrl ?? "https://transcribed.me") {
@@ -227,6 +286,12 @@ struct MenuBarView: View {
                 SettingsWindowController.shared.open(appState: appState)
             }
 
+            if isLoggedIn {
+                MenuRow("Log Out") {
+                    Task { await AuthService.shared.logout() }
+                }
+            }
+
             MenuRow("Quit Transcribed") {
                 Task {
                     await appState.stopTranscription()
@@ -237,5 +302,95 @@ struct MenuBarView: View {
         .padding()
         .frame(width: 280)
         .background(.ultraThinMaterial)
+    }
+
+    private func flashMarkerIcon(_ icon: String) {
+        withAnimation { markerIcon = icon }
+        Task {
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            withAnimation { markerIcon = nil }
+        }
+    }
+}
+
+// MARK: - Marker Note Window
+
+@MainActor
+class MarkerNoteWindowController {
+    static let shared = MarkerNoteWindowController()
+    private var window: NSWindow?
+    private var onSubmit: ((String) -> Void)?
+
+    func open(onSubmit: @escaping (String) -> Void) {
+        self.onSubmit = onSubmit
+
+        if let existing = window, existing.isVisible {
+            existing.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        let view = MarkerNoteView(
+            onCancel: { [weak self] in self?.close() },
+            onMark: { [weak self] note in
+                self?.onSubmit?(note)
+                self?.close()
+            }
+        )
+
+        let hostingView = NSHostingView(rootView: view)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 380, height: 280)
+
+        let w = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 380, height: 280),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        w.title = "Mark with Note"
+        w.contentView = hostingView
+        w.isReleasedWhenClosed = false
+        w.center()
+        w.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        window = w
+    }
+
+    private func close() {
+        window?.close()
+        window = nil
+    }
+}
+
+struct MarkerNoteView: View {
+    let onCancel: () -> Void
+    let onMark: (String) -> Void
+    @State private var note = ""
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Add a note to this conversation marker.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            TextEditor(text: $note)
+                .font(.system(size: 13))
+                .focused($isFocused)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4)
+                        .stroke(Color.secondary.opacity(0.3))
+                )
+                .onAppear { isFocused = true }
+            HStack {
+                Spacer()
+                Button("Cancel", action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+                Button("Mark") { onMark(note) }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(note.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding()
     }
 }

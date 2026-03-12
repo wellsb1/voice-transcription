@@ -19,6 +19,7 @@ actor BatchDetector {
     private var batchTimestamp: Date?
     private var speechDetected = false
     private var silenceStart: Date?
+    private var stopped = false
 
     // Track speech boundaries (sample indices) for audio clipping
     private var firstSpeechSample: Int?
@@ -47,9 +48,17 @@ actor BatchDetector {
     func setVadManager(_ vad: VadManager) {
         self.vadManager = vad
         self.vadState = .initial()
+        NSLog("[batch] VAD manager set")
+    }
+
+    private var debugCounter = 0
+
+    func resume() {
+        stopped = false
     }
 
     func addAudio(_ samples: [Float], timestamp: Date) async -> BatchResult? {
+        guard !stopped else { return nil }
         if batchTimestamp == nil {
             batchTimestamp = timestamp
         }
@@ -57,6 +66,13 @@ actor BatchDetector {
         vadPending.append(contentsOf: samples)
 
         let duration = Double(audioBuffer.count) / sampleRate
+
+        debugCounter += 1
+        if debugCounter % 2500 == 0 {
+            NSLog("[batch] buffer=%.1fs vadPending=%d speech=%d silence=%@",
+                  duration, vadPending.count, speechDetected ? 1 : 0,
+                  silenceStart.map { String(format: "%.1fs ago", Date().timeIntervalSince($0)) } ?? "nil")
+        }
 
         if let vad = vadManager {
             while vadPending.count >= vadChunkSize {
@@ -77,13 +93,13 @@ actor BatchDetector {
                             if firstSpeechSample == nil {
                                 firstSpeechSample = vadProcessedSamples + (event.sampleIndex > 0 ? event.sampleIndex : 0)
                             }
-                            logger.info("Speech start at \(String(format: "%.1f", duration))s")
+                            NSLog("[batch] SPEECH START at %.1fs", duration)
                         case .speechEnd:
                             if silenceStart == nil {
                                 silenceStart = Date()
                             }
                             lastSpeechEndSample = vadProcessedSamples + (event.sampleIndex > 0 ? event.sampleIndex : vadChunkSize)
-                            logger.info("Speech end at \(String(format: "%.1f", duration))s")
+                            NSLog("[batch] SPEECH END at %.1fs", duration)
                         @unknown default:
                             break
                         }
@@ -114,6 +130,7 @@ actor BatchDetector {
     }
 
     func flush() -> BatchResult? {
+        stopped = true
         guard !audioBuffer.isEmpty else { return nil }
         return flushBatch()
     }

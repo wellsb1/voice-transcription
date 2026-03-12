@@ -64,10 +64,46 @@ actor AuthService {
         // Step 4: Store credentials
         await MainActor.run {
             config.syncApiKey = apiKey
-            config.userEmail = deviceName
+        }
+
+        // Step 5: Fetch the user's email
+        if let email = await checkAuth() {
+            await MainActor.run { config.userEmail = email }
         }
 
         logger.info("Device authorized, API key stored")
+    }
+
+    /// Validate the stored API key by calling /api/auth/me.
+    /// Returns the user's email on success, or nil if the key is invalid/revoked.
+    func checkAuth() async -> String? {
+        let config = await MainActor.run { AppConfig.shared }
+        let baseUrl = await MainActor.run { config.syncApiUrl ?? "https://transcribed.me" }
+        let apiKey = await MainActor.run { config.syncApiKey }
+
+        guard let apiKey, !apiKey.isEmpty,
+              let url = URL(string: "\(baseUrl)/api/auth/me") else {
+            return nil
+        }
+
+        var request = URLRequest(url: url, timeoutInterval: 10)
+        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+
+        do {
+            let (data, response) = try await session.data(for: request)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            guard status >= 200 && status < 300 else { return nil }
+
+            struct MeResponse: Codable {
+                struct User: Codable { let email: String }
+                let user: User
+            }
+            let me = try JSONDecoder().decode(MeResponse.self, from: data)
+            return me.user.email
+        } catch {
+            logger.warning("Auth check failed: \(error.localizedDescription)")
+            return nil
+        }
     }
 
     func logout() async {

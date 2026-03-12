@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import ServiceManagement
 
 enum AudioSource: String, Codable, CaseIterable {
     case device = "device"
@@ -32,9 +33,6 @@ class AppConfig: ObservableObject {
     @Published var excludeApps: [String] {
         didSet { defaults.set(excludeApps, forKey: Self.key("excludeApps")) }
     }
-    @Published var diarizationEnabled: Bool {
-        didSet { defaults.set(diarizationEnabled, forKey: Self.key("diarizationEnabled")) }
-    }
     @Published var autoStart: Bool {
         didSet { defaults.set(autoStart, forKey: Self.key("autoStart")) }
     }
@@ -58,6 +56,12 @@ class AppConfig: ObservableObject {
     }
     @Published var pluginsDir: String? {
         didSet { defaults.set(pluginsDir, forKey: Self.key("pluginsDir")) }
+    }
+    @Published var launchAtLogin: Bool {
+        didSet {
+            defaults.set(launchAtLogin, forKey: Self.key("launchAtLogin"))
+            Self.applyLaunchAtLogin(launchAtLogin)
+        }
     }
     @Published var modelsReady: Bool {
         didSet { defaults.set(modelsReady, forKey: Self.key("modelsReady")) }
@@ -88,7 +92,6 @@ class AppConfig: ObservableObject {
         self.audioSource = AudioSource(rawValue: d.string(forKey: Self.key("audioSource")) ?? "") ?? .systemTap
         self.micDevice = d.string(forKey: Self.key("micDevice"))
         self.excludeApps = d.array(forKey: Self.key("excludeApps")) as? [String] ?? ["com.apple.Music", "com.spotify.client"]
-        self.diarizationEnabled = d.bool(forKey: Self.key("diarizationEnabled"))
         self.autoStart = d.bool(forKey: Self.key("autoStart"))
         self.minBatchDuration = d.object(forKey: Self.key("minBatchDuration")) as? Double ?? 30.0
         self.maxBatchDuration = d.object(forKey: Self.key("maxBatchDuration")) as? Double ?? 60.0
@@ -97,12 +100,25 @@ class AppConfig: ObservableObject {
         self.syncApiUrl = d.string(forKey: Self.key("syncApiUrl")) ?? "https://transcribed.me"
         self.saveAudio = d.bool(forKey: Self.key("saveAudio"))
         self.pluginsDir = d.string(forKey: Self.key("pluginsDir"))
+        self.launchAtLogin = d.object(forKey: Self.key("launchAtLogin")) as? Bool ?? true
         self.modelsReady = d.bool(forKey: Self.key("modelsReady"))
         self.diarizationModelsReady = d.bool(forKey: Self.key("diarizationModelsReady"))
         self.userEmail = d.string(forKey: Self.key("userEmail"))
     }
 
     private static func key(_ name: String) -> String { "\(keyPrefix)\(name)" }
+
+    static func applyLaunchAtLogin(_ enabled: Bool) {
+        do {
+            if enabled {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+        } catch {
+            // Silently ignore — fails for unsigned/ad-hoc builds
+        }
+    }
 
     static func slugify(_ name: String) -> String {
         name

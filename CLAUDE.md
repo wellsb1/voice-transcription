@@ -45,6 +45,11 @@ At the start of a new session, you MUST do these things before working on a new 
 ## README.md Policy
 - NEVER read or write README.md unless the user specifically tells you to.
 
+## Swift App (tools/transcribe-app)
+- Build and run with `make run` from `tools/transcribe-app/` — this builds release, bundles the .app, signs with Developer ID, and launches
+- NEVER use `IDENTITY=-` (ad-hoc signing) — it changes the code signature on every build, causing macOS to reset Screen Recording and other permissions
+- The Makefile defaults to the correct Developer ID identity; do not override it
+
 ## Technical Guidelines
 
 ### Before writing code:
